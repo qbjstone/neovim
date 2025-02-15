@@ -1,8 +1,9 @@
-local helpers = require('test.functional.helpers')(after_each)
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
-local clear = helpers.clear
-local exec = helpers.exec
-local feed = helpers.feed
+
+local clear = n.clear
+local exec = n.exec
+local feed = n.feed
 
 before_each(clear)
 
@@ -11,15 +12,9 @@ describe('statusline', function()
 
   before_each(function()
     screen = Screen.new(50, 7)
-    screen:attach()
   end)
 
   it('is updated in cmdline mode when using window-local statusline vim-patch:8.2.2737', function()
-    screen:set_default_attr_ids({
-      [1] = {bold = true, foreground = Screen.colors.Blue},  -- NonText
-      [2] = {bold = true, reverse = true},  -- StatusLine
-      [3] = {reverse = true},  -- StatusLineNC
-    })
     exec([[
       setlocal statusline=-%{mode()}-
       split
@@ -28,30 +23,25 @@ describe('statusline', function()
     screen:expect([[
       ^                                                  |
       {1:~                                                 }|
-      {2:+n+                                               }|
+      {3:+n+                                               }|
                                                         |
       {1:~                                                 }|
-      {3:-n-                                               }|
+      {2:-n-                                               }|
                                                         |
     ]])
     feed(':')
     screen:expect([[
                                                         |
       {1:~                                                 }|
-      {2:+c+                                               }|
+      {3:+c+                                               }|
                                                         |
       {1:~                                                 }|
-      {3:-c-                                               }|
+      {2:-c-                                               }|
       :^                                                 |
     ]])
   end)
 
   it('truncated item does not cause off-by-one highlight vim-patch:8.2.4929', function()
-    screen:set_default_attr_ids({
-      [1] = {bold = true, foreground = Screen.colors.Blue},  -- NonText
-      [2] = {foreground = Screen.colors.Blue},  -- User1
-      [3] = {background = Screen.colors.Red, foreground = Screen.colors.White},  -- User2
-    })
     exec([[
       set laststatus=2
       hi! link User1 Directory
@@ -60,24 +50,14 @@ describe('statusline', function()
     ]])
     screen:expect([[
       ^                                                  |
-      {1:~                                                 }|
-      {1:~                                                 }|
-      {1:~                                                 }|
-      {1:~                                                 }|
-      {3:<F}{2:GHI                                             }|
+      {1:~                                                 }|*4
+      {9:<F}{18:GHI                                             }|
                                                         |
     ]])
   end)
 
   -- oldtest: Test_statusline_showcmd()
   it('showcmdloc=statusline works', function()
-    screen:set_default_attr_ids({
-      [0] = {bold = true, foreground = Screen.colors.Blue},  -- NonText
-      [1] = {background = Screen.colors.LightGrey},  -- Visual
-      [2] = {bold = true},  -- MoreMsg
-      [3] = {bold = true, reverse = true},  -- StatusLine
-      [5] = {background = Screen.colors.LightGrey, foreground = Screen.colors.DarkBlue},  -- Folded
-    })
     exec([[
       func MyStatusLine()
         return '%S'
@@ -95,11 +75,9 @@ describe('statusline', function()
 
     feed('g')
     screen:expect([[
-      {5:+--  2 lines: a···································}|
+      {13:+--  2 lines: a···································}|
       ^c                                                 |
-      {0:~                                                 }|
-      {0:~                                                 }|
-      {0:~                                                 }|
+      {1:~                                                 }|*3
       {3:g                                                 }|
                                                         |
     ]])
@@ -110,21 +88,19 @@ describe('statusline', function()
       ^a                                                 |
       b                                                 |
       c                                                 |
-      {0:~                                                 }|
-      {0:~                                                 }|
+      {1:~                                                 }|*2
       {3:                                                  }|
                                                         |
     ]])
 
     feed('<C-V>Gl')
     screen:expect([[
-      {1:a}                                                 |
-      {1:b}                                                 |
-      {1:c}^                                                 |
-      {0:~                                                 }|
-      {0:~                                                 }|
+      {17:a}                                                 |
+      {17:b}                                                 |
+      {17:c}^                                                 |
+      {1:~                                                 }|*2
       {3:3x2                                               }|
-      {2:-- VISUAL BLOCK --}                                |
+      {5:-- VISUAL BLOCK --}                                |
     ]])
 
     feed('<Esc>1234')
@@ -132,8 +108,7 @@ describe('statusline', function()
       a                                                 |
       b                                                 |
       ^c                                                 |
-      {0:~                                                 }|
-      {0:~                                                 }|
+      {1:~                                                 }|*2
       {3:1234                                              }|
                                                         |
     ]])
@@ -145,8 +120,7 @@ describe('statusline', function()
       a                                                 |
       b                                                 |
       ^c                                                 |
-      {0:~                                                 }|
-      {0:~                                                 }|
+      {1:~                                                 }|*2
       {3:[No Name] [+]                          1234       }|
       :                                                 |
     ]])

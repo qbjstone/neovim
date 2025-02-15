@@ -3087,7 +3087,7 @@ func Test_nested_if_else_errors()
     endif
   END
   call writefile(code, 'Xtest')
-  call AssertException(['source Xtest'], 'Vim(else):E583: multiple :else')
+  call AssertException(['source Xtest'], 'Vim(else):E583: Multiple :else')
 
   " :elseif after :else
   let code =<< trim END
@@ -3109,7 +3109,7 @@ endfunc
 "	    should be given.
 "
 "	    This test reuses the function MESSAGES() from the previous test.
-"	    This functions checks the messages in g:msgfile.
+"	    This function checks the messages in g:msgfile.
 "-------------------------------------------------------------------------------
 
 func Test_nested_while_error()
@@ -3236,7 +3236,7 @@ endfunc
 "	    error messages should be given.
 "
 "	    This test reuses the function MESSAGES() from the previous test.
-"	    This functions checks the messages in g:msgfile.
+"	    This function checks the messages in g:msgfile.
 "-------------------------------------------------------------------------------
 
 func Test_nested_cont_break_error()
@@ -3344,7 +3344,7 @@ endfunc
 "	    should be given.
 "
 "	    This test reuses the function MESSAGES() from the previous test.
-"	    This functions checks the messages in g:msgfile.
+"	    This function check the messages in g:msgfile.
 "-------------------------------------------------------------------------------
 
 func Test_nested_endtry_error()
@@ -3641,7 +3641,7 @@ endfunc
 "	    exceptions.
 "-------------------------------------------------------------------------------
 
-func Test_execption_info_for_error()
+func Test_exception_info_for_error()
   CheckEnglish
 
   let test =<< trim [CODE]
@@ -6502,16 +6502,22 @@ func Test_type()
     call assert_equal(2, type(function("tr", [8])))
     call assert_equal(3, type([]))
     call assert_equal(4, type({}))
-    call assert_equal(5, type(0.0))
+    if has('float')
+      call assert_equal(5, type(0.0))
+    endif
     call assert_equal(6, type(v:false))
     call assert_equal(6, type(v:true))
+    " call assert_equal(7, type(v:none))
     call assert_equal(7, type(v:null))
     call assert_equal(v:t_number, type(0))
     call assert_equal(v:t_string, type(""))
     call assert_equal(v:t_func, type(function("tr")))
+    call assert_equal(v:t_func, type(function("tr", [8])))
     call assert_equal(v:t_list, type([]))
     call assert_equal(v:t_dict, type({}))
-    call assert_equal(v:t_float, type(0.0))
+    if has('float')
+      call assert_equal(v:t_float, type(0.0))
+    endif
     call assert_equal(v:t_bool, type(v:false))
     call assert_equal(v:t_bool, type(v:true))
     " call assert_equal(v:t_none, type(v:none))
@@ -6705,6 +6711,11 @@ func Test_echo_and_string()
     let l = split(result, "\n")
     call assert_equal(["{'a': [], 'b': []}",
 		     \ "{'a': [], 'b': []}"], l)
+
+    call assert_fails('echo &:', 'E112:')
+    call assert_fails('echo &g:', 'E112:')
+    call assert_fails('echo &l:', 'E112:')
+
 endfunc
 
 "-------------------------------------------------------------------------------
@@ -6824,10 +6835,12 @@ func Test_bitwise_functions()
     call assert_equal(16, and(127, 16))
     eval 127->and(16)->assert_equal(16)
     call assert_equal(0, and(127, 128))
-    call assert_fails("call and(1.0, 1)", 'E805:')
     call assert_fails("call and([], 1)", 'E745:')
     call assert_fails("call and({}, 1)", 'E728:')
-    call assert_fails("call and(1, 1.0)", 'E805:')
+    if has('float')
+      call assert_fails("call and(1.0, 1)", 'E805:')
+      call assert_fails("call and(1, 1.0)", 'E805:')
+    endif
     call assert_fails("call and(1, [])", 'E745:')
     call assert_fails("call and(1, {})", 'E728:')
     " or
@@ -6835,10 +6848,12 @@ func Test_bitwise_functions()
     call assert_equal(15, or(8, 7))
     eval 8->or(7)->assert_equal(15)
     call assert_equal(123, or(0, 123))
-    call assert_fails("call or(1.0, 1)", 'E805:')
     call assert_fails("call or([], 1)", 'E745:')
     call assert_fails("call or({}, 1)", 'E728:')
-    call assert_fails("call or(1, 1.0)", 'E805:')
+    if has('float')
+      call assert_fails("call or(1.0, 1)", 'E805:')
+      call assert_fails("call or(1, 1.0)", 'E805:')
+    endif
     call assert_fails("call or(1, [])", 'E745:')
     call assert_fails("call or(1, {})", 'E728:')
     " xor
@@ -6846,10 +6861,12 @@ func Test_bitwise_functions()
     call assert_equal(111, xor(127, 16))
     eval 127->xor(16)->assert_equal(111)
     call assert_equal(255, xor(127, 128))
-    call assert_fails("call xor(1.0, 1)", 'E805:')
+    if has('float')
+      call assert_fails("call xor(1.0, 1)", 'E805:')
+      call assert_fails("call xor(1, 1.0)", 'E805:')
+    endif
     call assert_fails("call xor([], 1)", 'E745:')
     call assert_fails("call xor({}, 1)", 'E728:')
-    call assert_fails("call xor(1, 1.0)", 'E805:')
     call assert_fails("call xor(1, [])", 'E745:')
     call assert_fails("call xor(1, {})", 'E728:')
     " invert
@@ -6857,7 +6874,9 @@ func Test_bitwise_functions()
     eval 127->invert()->and(65535)->assert_equal(65408)
     call assert_equal(65519, and(invert(16), 65535))
     call assert_equal(65407, and(invert(128), 65535))
-    call assert_fails("call invert(1.0)", 'E805:')
+    if has('float')
+      call assert_fails("call invert(1.0)", 'E805:')
+    endif
     call assert_fails("call invert([])", 'E745:')
     call assert_fails("call invert({})", 'E728:')
 endfunc
@@ -6992,7 +7011,7 @@ func Test_compound_assignment_operators()
     call assert_equal(6, &scrolljump)
     let &scrolljump %= 5
     call assert_equal(1, &scrolljump)
-    call assert_fails('let &scrolljump .= "j"', 'E734:')
+    call assert_fails('let &scrolljump .= "j"', ['E734:', 'E734:'])
     set scrolljump&vim
 
     let &foldlevelstart = 2
@@ -7028,6 +7047,122 @@ func Test_unlet_env()
     call assert_equal('yes', $TESTVAR)
     unlet $TESTVAR
     call assert_equal('', $TESTVAR)
+endfunc
+
+func Test_refcount()
+    throw 'Skipped: Nvim does not support test_refcount()'
+    " Immediate values
+    call assert_equal(-1, test_refcount(1))
+    call assert_equal(-1, test_refcount('s'))
+    call assert_equal(-1, test_refcount(v:true))
+    call assert_equal(0, test_refcount([]))
+    call assert_equal(0, test_refcount({}))
+    call assert_equal(0, test_refcount(0zff))
+    call assert_equal(0, test_refcount({-> line('.')}))
+    call assert_equal(-1, test_refcount(0.1))
+    if has('job')
+        call assert_equal(0, test_refcount(job_start([&shell, &shellcmdflag, 'echo .'])))
+    endif
+
+    " No refcount types
+    let x = 1
+    call assert_equal(-1, test_refcount(x))
+    let x = 's'
+    call assert_equal(-1, test_refcount(x))
+    let x = v:true
+    call assert_equal(-1, test_refcount(x))
+    let x = 0.1
+    call assert_equal(-1, test_refcount(x))
+
+    " Check refcount
+    let x = []
+    call assert_equal(1, test_refcount(x))
+
+    let x = {}
+    call assert_equal(1, x->test_refcount())
+
+    let x = 0zff
+    call assert_equal(1, test_refcount(x))
+
+    let X = {-> line('.')}
+    call assert_equal(1, test_refcount(X))
+    let Y = X
+    call assert_equal(2, test_refcount(X))
+
+    if has('job')
+        let job = job_start([&shell, &shellcmdflag, 'echo .'])
+        call assert_equal(1, test_refcount(job))
+        call assert_equal(1, test_refcount(job_getchannel(job)))
+        call assert_equal(1, test_refcount(job))
+    endif
+
+    " Function arguments, copying and unassigning
+    func ExprCheck(x, i)
+        let i = a:i + 1
+        call assert_equal(i, test_refcount(a:x))
+        let Y = a:x
+        call assert_equal(i + 1, test_refcount(a:x))
+        call assert_equal(test_refcount(a:x), test_refcount(Y))
+        let Y = 0
+        call assert_equal(i, test_refcount(a:x))
+    endfunc
+    call ExprCheck([], 0)
+    call ExprCheck({}, 0)
+    call ExprCheck(0zff, 0)
+    call ExprCheck({-> line('.')}, 0)
+    if has('job')
+	call ExprCheck(job, 1)
+	call ExprCheck(job_getchannel(job), 1)
+	call job_stop(job)
+    endif
+    delfunc ExprCheck
+
+    " Regarding function
+    func Func(x) abort
+        call assert_equal(2, test_refcount(function('Func')))
+        call assert_equal(0, test_refcount(funcref('Func')))
+    endfunc
+    call assert_equal(1, test_refcount(function('Func')))
+    call assert_equal(0, test_refcount(function('Func', [1])))
+    call assert_equal(0, test_refcount(funcref('Func')))
+    call assert_equal(0, test_refcount(funcref('Func', [1])))
+    let X = function('Func')
+    let Y = X
+    call assert_equal(1, test_refcount(X))
+    let X = function('Func', [1])
+    let Y = X
+    call assert_equal(2, test_refcount(X))
+    let X = funcref('Func')
+    let Y = X
+    call assert_equal(2, test_refcount(X))
+    let X = funcref('Func', [1])
+    let Y = X
+    call assert_equal(2, test_refcount(X))
+    unlet X
+    unlet Y
+    call Func(1)
+    delfunc Func
+
+    " Function with dict
+    func DictFunc() dict
+        call assert_equal(3, test_refcount(self))
+    endfunc
+    let d = {'Func': function('DictFunc')}
+    call assert_equal(1, test_refcount(d))
+    call assert_equal(0, test_refcount(d.Func))
+    call d.Func()
+    unlet d
+    delfunc DictFunc
+
+    if has('channel')
+      call assert_equal(-1, test_refcount(test_null_job()))
+      call assert_equal(-1, test_refcount(test_null_channel()))
+    endif
+    call assert_equal(-1, test_refcount(test_null_function()))
+    call assert_equal(-1, test_refcount(test_null_partial()))
+    call assert_equal(-1, test_refcount(test_null_blob()))
+    call assert_equal(-1, test_refcount(test_null_list()))
+    call assert_equal(-1, test_refcount(test_null_dict()))
 endfunc
 
 " Test for missing :endif, :endfor, :endwhile and :endtry           {{{1
@@ -7128,30 +7263,30 @@ func Test_deep_nest()
 
   " Deep nesting of if ... endif
   call term_sendkeys(buf, ":call Test1()\n")
-  call term_wait(buf)
+  call TermWait(buf)
   call WaitForAssert({-> assert_match('^E579:', term_getline(buf, 5))})
 
   " Deep nesting of for ... endfor
   call term_sendkeys(buf, ":call Test2()\n")
-  call term_wait(buf)
+  call TermWait(buf)
   call WaitForAssert({-> assert_match('^E585:', term_getline(buf, 5))})
 
   " Deep nesting of while ... endwhile
   call term_sendkeys(buf, ":call Test3()\n")
-  call term_wait(buf)
+  call TermWait(buf)
   call WaitForAssert({-> assert_match('^E585:', term_getline(buf, 5))})
 
   " Deep nesting of try ... endtry
   call term_sendkeys(buf, ":call Test4()\n")
-  call term_wait(buf)
+  call TermWait(buf)
   call WaitForAssert({-> assert_match('^E601:', term_getline(buf, 5))})
 
   " Deep nesting of function ... endfunction
   call term_sendkeys(buf, ":call Test5()\n")
-  call term_wait(buf)
+  call TermWait(buf)
   call WaitForAssert({-> assert_match('^E1058:', term_getline(buf, 4))})
   call term_sendkeys(buf, "\<C-C>\n")
-  call term_wait(buf)
+  call TermWait(buf)
 
   "let l = ''
   "for i in range(1, 6)
@@ -7314,6 +7449,57 @@ func Test_for_over_string()
     let res ..= c .. '-'
   endfor
   call assert_equal('', res)
+
+  " Test for using "_" as the loop variable
+  let i = 0
+  let s = 'abc'
+  for _ in s
+    call assert_equal(s[i], _)
+    let i += 1
+  endfor
+endfunc
+
+" Test for deeply nested :source command  {{{1
+func Test_deeply_nested_source()
+  throw 'Skipped: Vim9 script is N/A'
+  let lines =<< trim END
+
+      so
+      sil 0scr
+      delete
+      so
+      0
+  END
+  call writefile(["vim9 silent! @0 \n/"] + lines, 'Xnested.vim', 'D')
+
+  " this must not crash
+  let cmd = GetVimCommand() .. " -e -s -S Xnested.vim -c qa!"
+  call system(cmd)
+endfunc
+
+func Test_exception_silent()
+  XpathINIT
+  let lines =<< trim END
+  func Throw()
+    Xpath 'a'
+    throw "Uncaught"
+    " This line is not executed.
+    Xpath 'b'
+  endfunc
+  " The exception is suppressed due to the presence of silent!.
+  silent! call Throw()
+  try
+    call DoesNotExist()
+  catch /E117:/
+    Xpath 'c'
+  endtry
+  Xpath 'd'
+  END
+  let verify =<< trim END
+    call assert_equal('acd', g:Xpath)
+  END
+
+  call RunInNewVim(lines, verify)
 endfunc
 
 "-------------------------------------------------------------------------------
