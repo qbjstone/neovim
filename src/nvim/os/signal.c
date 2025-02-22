@@ -1,22 +1,25 @@
-// This is an open source non-commercial project. Dear PVS-Studio, please check
-// it. PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
-
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
+
 #ifndef MSWIN
-# include <signal.h>  // for sigset_t
+# include <signal.h>
 #endif
 
 #include "nvim/autocmd.h"
+#include "nvim/autocmd_defs.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/eval.h"
+#include "nvim/event/defs.h"
 #include "nvim/event/signal.h"
 #include "nvim/globals.h"
 #include "nvim/log.h"
 #include "nvim/main.h"
-#include "nvim/memline.h"
 #include "nvim/os/signal.h"
+
+#ifdef SIGPWR
+# include "nvim/memline.h"
+#endif
 
 static SignalWatcher spipe, shup, squit, sterm, susr1, swinch;
 #ifdef SIGPWR
@@ -172,7 +175,7 @@ static void deadly_signal(int signum)
 
   ILOG("got signal %d (%s)", signum, signal_name(signum));
 
-  snprintf(IObuff, IOSIZE, "Vim: Caught deadly signal '%s'\r\n", signal_name(signum));
+  snprintf(IObuff, IOSIZE, "Nvim: Caught deadly signal '%s'\n", signal_name(signum));
 
   // Preserve files and exit.
   preserve_exit(IObuff);
@@ -184,8 +187,7 @@ static void on_signal(SignalWatcher *handle, int signum, void *data)
   switch (signum) {
 #ifdef SIGPWR
   case SIGPWR:
-    // Signal of a power failure(eg batteries low), flush the swap files to
-    // be safe
+    // Signal of a power failure (eg batteries low), flush the swap files to be safe
     ml_sync_all(false, false, true);
     break;
 #endif

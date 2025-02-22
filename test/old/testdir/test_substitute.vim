@@ -4,6 +4,32 @@ source shared.vim
 source check.vim
 source screendump.vim
 
+" NOTE: This needs to be the first test to be
+"       run in the file, since it depends on
+"       that the previous substitution atom
+"       was not yet set.
+"
+" recursive call of :s and sub-replace special
+" (did cause heap-use-after free in < v9.0.2121)
+func Test_aaaa_substitute_expr_recursive_special()
+  func R()
+    " FIXME: leaving out the 'n' flag leaks memory, why?
+    %s/./\='.'/gn
+  endfunc
+  new Xfoobar_UAF
+  put ='abcdef'
+  let bufnr = bufnr('%')
+  try
+    silent! :s/./~\=R()/0
+    "call assert_fails(':s/./~\=R()/0', 'E939:')
+    let @/='.'
+    ~g
+  catch /^Vim\%((\a\+)\)\=:E565:/
+  endtry
+  delfunc R
+  exe bufnr .. "bw!"
+endfunc
+
 func Test_multiline_subst()
   enew!
   call append(0, ["1 aa",
@@ -148,213 +174,13 @@ func Test_substitute_repeat()
   bwipe!
 endfunc
 
-" Tests for *sub-replace-special* and *sub-replace-expression* on :substitute.
-
-" Execute a list of :substitute command tests
-func Run_SubCmd_Tests(tests)
-  enew!
-  for t in a:tests
-    let start = line('.') + 1
-    let end = start + len(t[2]) - 1
-    exe "normal o" . t[0]
-    call cursor(start, 1)
-    exe t[1]
-    call assert_equal(t[2], getline(start, end), t[1])
-  endfor
-  enew!
-endfunc
-
-func Test_sub_cmd_1()
-  set magic
-  set cpo&
-
-  " List entry format: [input, cmd, output]
-  let tests = [['A', 's/A/&&/', ['AA']],
-	      \ ['B', 's/B/\&/', ['&']],
-	      \ ['C123456789', 's/C\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)/\0\9\8\7\6\5\4\3\2\1/', ['C123456789987654321']],
-	      \ ['D', 's/D/d/', ['d']],
-	      \ ['E', 's/E/~/', ['d']],
-	      \ ['F', 's/F/\~/', ['~']],
-	      \ ['G', 's/G/\ugg/', ['Gg']],
-	      \ ['H', 's/H/\Uh\Eh/', ['Hh']],
-	      \ ['I', 's/I/\lII/', ['iI']],
-	      \ ['J', 's/J/\LJ\EJ/', ['jJ']],
-	      \ ['K', 's/K/\Uk\ek/', ['Kk']],
-	      \ ['lLl', "s/L/\<C-V>\<C-M>/", ["l\<C-V>", 'l']],
-	      \ ['mMm', 's/M/\r/', ['m', 'm']],
-	      \ ['nNn', "s/N/\\\<C-V>\<C-M>/", ["n\<C-V>", 'n']],
-	      \ ['oOo', 's/O/\n/', ["o\no"]],
-	      \ ['pPp', 's/P/\b/', ["p\<C-H>p"]],
-	      \ ['qQq', 's/Q/\t/', ["q\tq"]],
-	      \ ['rRr', 's/R/\\/', ['r\r']],
-	      \ ['sSs', 's/S/\c/', ['scs']],
-	      \ ['tTt', "s/T/\<C-V>\<C-J>/", ["t\<C-V>\<C-J>t"]],
-	      \ ['U', 's/U/\L\uuUu\l\EU/', ['UuuU']],
-	      \ ['V', 's/V/\U\lVvV\u\Ev/', ['vVVv']],
-	      \ ['\', 's/\\/\\\\/', ['\\']]
-	      \ ]
-  call Run_SubCmd_Tests(tests)
-endfunc
-
-func Test_sub_cmd_2()
-  set nomagic
-  set cpo&
-
-  " List entry format: [input, cmd, output]
-  let tests = [['A', 's/A/&&/', ['&&']],
-	      \ ['B', 's/B/\&/', ['B']],
-	      \ ['C123456789', 's/\mC\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)/\0\9\8\7\6\5\4\3\2\1/', ['C123456789987654321']],
-	      \ ['D', 's/D/d/', ['d']],
-	      \ ['E', 's/E/~/', ['~']],
-	      \ ['F', 's/F/\~/', ['~']],
-	      \ ['G', 's/G/\ugg/', ['Gg']],
-	      \ ['H', 's/H/\Uh\Eh/', ['Hh']],
-	      \ ['I', 's/I/\lII/', ['iI']],
-	      \ ['J', 's/J/\LJ\EJ/', ['jJ']],
-	      \ ['K', 's/K/\Uk\ek/', ['Kk']],
-	      \ ['lLl', "s/L/\<C-V>\<C-M>/", ["l\<C-V>", 'l']],
-	      \ ['mMm', 's/M/\r/', ['m', 'm']],
-	      \ ['nNn', "s/N/\\\<C-V>\<C-M>/", ["n\<C-V>", 'n']],
-	      \ ['oOo', 's/O/\n/', ["o\no"]],
-	      \ ['pPp', 's/P/\b/', ["p\<C-H>p"]],
-	      \ ['qQq', 's/Q/\t/', ["q\tq"]],
-	      \ ['rRr', 's/R/\\/', ['r\r']],
-	      \ ['sSs', 's/S/\c/', ['scs']],
-	      \ ['tTt', "s/T/\<C-V>\<C-J>/", ["t\<C-V>\<C-J>t"]],
-	      \ ['U', 's/U/\L\uuUu\l\EU/', ['UuuU']],
-	      \ ['V', 's/V/\U\lVvV\u\Ev/', ['vVVv']],
-	      \ ['\', 's/\\/\\\\/', ['\\']]
-	      \ ]
-  call Run_SubCmd_Tests(tests)
-endfunc
-
-func Test_sub_cmd_3()
-  set nomagic
-  set cpo&
-
-  " List entry format: [input, cmd, output]
-  let tests = [['aAa', "s/A/\\='\\'/", ['a\a']],
-	      \ ['bBb', "s/B/\\='\\\\'/", ['b\\b']],
-	      \ ['cCc', "s/C/\\='\<C-V>\<C-M>'/", ["c\<C-V>", 'c']],
-	      \ ['dDd', "s/D/\\='\\\<C-V>\<C-M>'/", ["d\\\<C-V>", 'd']],
-	      \ ['eEe', "s/E/\\='\\\\\<C-V>\<C-M>'/", ["e\\\\\<C-V>", 'e']],
-	      \ ['fFf', "s/F/\\='\r'/", ['f', 'f']],
-	      \ ['gGg', "s/G/\\='\<C-V>\<C-J>'/", ["g\<C-V>", 'g']],
-	      \ ['hHh', "s/H/\\='\\\<C-V>\<C-J>'/", ["h\\\<C-V>", 'h']],
-	      \ ['iIi', "s/I/\\='\\\\\<C-V>\<C-J>'/", ["i\\\\\<C-V>", 'i']],
-	      \ ['jJj', "s/J/\\='\n'/", ['j', 'j']],
-	      \ ['kKk', 's/K/\="\r"/', ['k', 'k']],
-	      \ ['lLl', 's/L/\="\n"/', ['l', 'l']]
-	      \ ]
-  call Run_SubCmd_Tests(tests)
-endfunc
-
-" Test for submatch() on :substitute.
-func Test_sub_cmd_4()
-  set magic&
-  set cpo&
-
-  " List entry format: [input, cmd, output]
-  let tests = [ ['aAa', "s/A/\\=substitute(submatch(0), '.', '\\', '')/",
-	      \				['a\a']],
-	      \ ['bBb', "s/B/\\=substitute(submatch(0), '.', '\\', '')/",
-	      \				['b\b']],
-	      \ ['cCc', "s/C/\\=substitute(submatch(0), '.', '\<C-V>\<C-M>', '')/",
-	      \				["c\<C-V>", 'c']],
-	      \ ['dDd', "s/D/\\=substitute(submatch(0), '.', '\\\<C-V>\<C-M>', '')/",
-	      \				["d\<C-V>", 'd']],
-	      \ ['eEe', "s/E/\\=substitute(submatch(0), '.', '\\\\\<C-V>\<C-M>', '')/",
-	      \				["e\\\<C-V>", 'e']],
-	      \ ['fFf', "s/F/\\=substitute(submatch(0), '.', '\\r', '')/",
-	      \				['f', 'f']],
-	      \ ['gGg', 's/G/\=substitute(submatch(0), ".", "\<C-V>\<C-J>", "")/',
-	      \				["g\<C-V>", 'g']],
-	      \ ['hHh', 's/H/\=substitute(submatch(0), ".", "\\\<C-V>\<C-J>", "")/',
-	      \				["h\<C-V>", 'h']],
-	      \ ['iIi', 's/I/\=substitute(submatch(0), ".", "\\\\\<C-V>\<C-J>", "")/',
-	      \				["i\\\<C-V>", 'i']],
-	      \ ['jJj', "s/J/\\=substitute(submatch(0), '.', '\\n', '')/",
-	      \				['j', 'j']],
-	      \ ['kKk', "s/K/\\=substitute(submatch(0), '.', '\\r', '')/",
-	      \				['k', 'k']],
-	      \ ['lLl', "s/L/\\=substitute(submatch(0), '.', '\\n', '')/",
-	      \				['l', 'l']],
-	      \ ]
-  call Run_SubCmd_Tests(tests)
-endfunc
-
-func Test_sub_cmd_5()
-  set magic&
-  set cpo&
-
-  " List entry format: [input, cmd, output]
-  let tests = [ ['A123456789', 's/A\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)/\=submatch(0) . submatch(9) . submatch(8) . submatch(7) . submatch(6) . submatch(5) . submatch(4) . submatch(3) . submatch(2) . submatch(1)/', ['A123456789987654321']],
-	      \ ['B123456789', 's/B\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)/\=string([submatch(0, 1), submatch(9, 1), submatch(8, 1), submatch(7, 1), submatch(6, 1), submatch(5, 1), submatch(4, 1), submatch(3, 1), submatch(2, 1), submatch(1, 1)])/', ["[['B123456789'], ['9'], ['8'], ['7'], ['6'], ['5'], ['4'], ['3'], ['2'], ['1']]"]],
-	      \ ]
-  call Run_SubCmd_Tests(tests)
-endfunc
-
-" Test for *:s%* on :substitute.
-func Test_sub_cmd_6()
-  set magic&
-  " Nvim: no "/" flag in 'cpoptions'.
-  " set cpo+=/
-
-  " List entry format: [input, cmd, output]
-  let tests = [ ['A', 's/A/a/', ['a']],
-	      \ ['B', 's/B/%/', ['a']],
-	      \ ]
-  " call Run_SubCmd_Tests(tests)
-
-  set cpo-=/
-  let tests = [ ['C', 's/C/c/', ['c']],
-	      \ ['D', 's/D/%/', ['%']],
-	      \ ]
-  call Run_SubCmd_Tests(tests)
-
-  set cpo&
-endfunc
-
-" Test for :s replacing \n with  line break.
-func Test_sub_cmd_7()
-  set magic&
-  set cpo&
-
-  " List entry format: [input, cmd, output]
-  let tests = [ ["A\<C-V>\<C-M>A", 's/A./\=submatch(0)/', ['A', 'A']],
-	      \ ["B\<C-V>\<C-J>B", 's/B./\=submatch(0)/', ['B', 'B']],
-	      \ ["C\<C-V>\<C-J>C", 's/C./\=strtrans(string(submatch(0, 1)))/', [strtrans("['C\<C-J>']C")]],
-	      \ ["D\<C-V>\<C-J>\nD", 's/D.\nD/\=strtrans(string(submatch(0, 1)))/', [strtrans("['D\<C-J>', 'D']")]],
-	      \ ["E\<C-V>\<C-J>\n\<C-V>\<C-J>\n\<C-V>\<C-J>\n\<C-V>\<C-J>\n\<C-V>\<C-J>E", 's/E\_.\{-}E/\=strtrans(string(submatch(0, 1)))/', [strtrans("['E\<C-J>', '\<C-J>', '\<C-J>', '\<C-J>', '\<C-J>E']")]],
-	      \ ]
-  call Run_SubCmd_Tests(tests)
-
-  exe "normal oQ\nQ\<Esc>k"
-  call assert_fails('s/Q[^\n]Q/\=submatch(0)."foobar"/', 'E486')
-  enew!
-endfunc
-
-func TitleString()
-  let check = 'foo' =~ 'bar'
-  return ""
-endfunc
-
-func Test_sub_cmd_8()
-  set titlestring=%{TitleString()}
-
-  enew!
-  call append(0, ['', 'test_one', 'test_two'])
-  call cursor(1,1)
-  /^test_one/s/.*/\="foo\nbar"/
-  call assert_equal('foo', getline(2))
-  call assert_equal('bar', getline(3))
-  call feedkeys(':/^test_two/s/.*/\="foo\nbar"/c', "t")
-  call feedkeys("\<CR>y", "xt")
-  call assert_equal('foo', getline(4))
-  call assert_equal('bar', getline(5))
-
-  enew!
-  set titlestring&
+" Test :s with ? as delimiter.
+func Test_substitute_question_delimiter()
+  new
+  call setline(1, '??:??')
+  %s?\?\??!!?g
+  call assert_equal('!!:!!', getline(1))
+  bwipe!
 endfunc
 
 " Test %s/\n// which is implemented as a special case to use a
@@ -415,6 +241,7 @@ func Test_substitute_count()
   call assert_equal(['foo foo', 'foo foo', 'foo foo', 'bar foo', 'bar foo'],
         \           getline(1, '$'))
 
+  call assert_fails('s/./b/2147483647', 'E1510:')
   bwipe!
 endfunc
 
@@ -666,7 +493,223 @@ func Test_substitute_partial()
 
   " 20 arguments plus one is too many
   let Replacer = function('SubReplacer20', repeat(['foo'], 20))
-  call assert_fails("call substitute('123', '2', Replacer, 'g')", 'E118')
+  call assert_fails("call substitute('123', '2', Replacer, 'g')", 'E118:')
+endfunc
+
+func Test_substitute_float()
+  CheckFeature float
+
+  call assert_equal('number 1.23', substitute('number ', '$', { -> 1.23 }, ''))
+  " vim9 assert_equal('number 1.23', substitute('number ', '$', () => 1.23, ''))
+endfunc
+
+" Tests for *sub-replace-special* and *sub-replace-expression* on :substitute.
+
+" Execute a list of :substitute command tests
+func Run_SubCmd_Tests(tests)
+  enew!
+  for t in a:tests
+    let start = line('.') + 1
+    let end = start + len(t[2]) - 1
+    exe "normal o" . t[0]
+    call cursor(start, 1)
+    exe t[1]
+    call assert_equal(t[2], getline(start, end), t[1])
+  endfor
+  enew!
+endfunc
+
+func Test_sub_cmd_1()
+  set magic
+  set cpo&
+
+  " List entry format: [input, cmd, output]
+  let tests = [['A', 's/A/&&/', ['AA']],
+	      \ ['B', 's/B/\&/', ['&']],
+	      \ ['C123456789', 's/C\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)/\0\9\8\7\6\5\4\3\2\1/', ['C123456789987654321']],
+	      \ ['D', 's/D/d/', ['d']],
+	      \ ['E', 's/E/~/', ['d']],
+	      \ ['F', 's/F/\~/', ['~']],
+	      \ ['G', 's/G/\ugg/', ['Gg']],
+	      \ ['H', 's/H/\Uh\Eh/', ['Hh']],
+	      \ ['I', 's/I/\lII/', ['iI']],
+	      \ ['J', 's/J/\LJ\EJ/', ['jJ']],
+	      \ ['K', 's/K/\Uk\ek/', ['Kk']],
+	      \ ['lLl', "s/L/\<C-V>\<C-M>/", ["l\<C-V>", 'l']],
+	      \ ['mMm', 's/M/\r/', ['m', 'm']],
+	      \ ['nNn', "s/N/\\\<C-V>\<C-M>/", ["n\<C-V>", 'n']],
+	      \ ['oOo', 's/O/\n/', ["o\no"]],
+	      \ ['pPp', 's/P/\b/', ["p\<C-H>p"]],
+	      \ ['qQq', 's/Q/\t/', ["q\tq"]],
+	      \ ['rRr', 's/R/\\/', ['r\r']],
+	      \ ['sSs', 's/S/\c/', ['scs']],
+	      \ ['tTt', "s/T/\<C-V>\<C-J>/", ["t\<C-V>\<C-J>t"]],
+	      \ ['U', 's/U/\L\uuUu\l\EU/', ['UuuU']],
+	      \ ['V', 's/V/\U\lVvV\u\Ev/', ['vVVv']],
+	      \ ['\', 's/\\/\\\\/', ['\\']]
+	      \ ]
+  call Run_SubCmd_Tests(tests)
+endfunc
+
+func Test_sub_cmd_2()
+  set nomagic
+  set cpo&
+
+  " List entry format: [input, cmd, output]
+  let tests = [['A', 's/A/&&/', ['&&']],
+	      \ ['B', 's/B/\&/', ['B']],
+	      \ ['C123456789', 's/\mC\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)/\0\9\8\7\6\5\4\3\2\1/', ['C123456789987654321']],
+	      \ ['D', 's/D/d/', ['d']],
+	      \ ['E', 's/E/~/', ['~']],
+	      \ ['F', 's/F/\~/', ['~']],
+	      \ ['G', 's/G/\ugg/', ['Gg']],
+	      \ ['H', 's/H/\Uh\Eh/', ['Hh']],
+	      \ ['I', 's/I/\lII/', ['iI']],
+	      \ ['J', 's/J/\LJ\EJ/', ['jJ']],
+	      \ ['K', 's/K/\Uk\ek/', ['Kk']],
+	      \ ['lLl', "s/L/\<C-V>\<C-M>/", ["l\<C-V>", 'l']],
+	      \ ['mMm', 's/M/\r/', ['m', 'm']],
+	      \ ['nNn', "s/N/\\\<C-V>\<C-M>/", ["n\<C-V>", 'n']],
+	      \ ['oOo', 's/O/\n/', ["o\no"]],
+	      \ ['pPp', 's/P/\b/', ["p\<C-H>p"]],
+	      \ ['qQq', 's/Q/\t/', ["q\tq"]],
+	      \ ['rRr', 's/R/\\/', ['r\r']],
+	      \ ['sSs', 's/S/\c/', ['scs']],
+	      \ ['tTt', "s/T/\<C-V>\<C-J>/", ["t\<C-V>\<C-J>t"]],
+	      \ ['U', 's/U/\L\uuUu\l\EU/', ['UuuU']],
+	      \ ['V', 's/V/\U\lVvV\u\Ev/', ['vVVv']],
+	      \ ['\', 's/\\/\\\\/', ['\\']]
+	      \ ]
+  call Run_SubCmd_Tests(tests)
+endfunc
+
+func Test_sub_cmd_3()
+  set nomagic
+  set cpo&
+
+  " List entry format: [input, cmd, output]
+  let tests = [['aAa', "s/A/\\='\\'/", ['a\a']],
+	      \ ['bBb', "s/B/\\='\\\\'/", ['b\\b']],
+	      \ ['cCc', "s/C/\\='\<C-V>\<C-M>'/", ["c\<C-V>", 'c']],
+	      \ ['dDd', "s/D/\\='\\\<C-V>\<C-M>'/", ["d\\\<C-V>", 'd']],
+	      \ ['eEe', "s/E/\\='\\\\\<C-V>\<C-M>'/", ["e\\\\\<C-V>", 'e']],
+	      \ ['fFf', "s/F/\\='\r'/", ['f', 'f']],
+	      \ ['gGg', "s/G/\\='\<C-V>\<C-J>'/", ["g\<C-V>", 'g']],
+	      \ ['hHh', "s/H/\\='\\\<C-V>\<C-J>'/", ["h\\\<C-V>", 'h']],
+	      \ ['iIi', "s/I/\\='\\\\\<C-V>\<C-J>'/", ["i\\\\\<C-V>", 'i']],
+	      \ ['jJj', "s/J/\\='\n'/", ['j', 'j']],
+	      \ ['kKk', 's/K/\="\r"/', ['k', 'k']],
+	      \ ['lLl', 's/L/\="\n"/', ['l', 'l']]
+	      \ ]
+  call Run_SubCmd_Tests(tests)
+endfunc
+
+" Test for submatch() on :substitute.
+func Test_sub_cmd_4()
+  set magic&
+  set cpo&
+
+  " List entry format: [input, cmd, output]
+  let tests = [ ['aAa', "s/A/\\=substitute(submatch(0), '.', '\\', '')/",
+	      \				['a\a']],
+	      \ ['bBb', "s/B/\\=substitute(submatch(0), '.', '\\', '')/",
+	      \				['b\b']],
+	      \ ['cCc', "s/C/\\=substitute(submatch(0), '.', '\<C-V>\<C-M>', '')/",
+	      \				["c\<C-V>", 'c']],
+	      \ ['dDd', "s/D/\\=substitute(submatch(0), '.', '\\\<C-V>\<C-M>', '')/",
+	      \				["d\<C-V>", 'd']],
+	      \ ['eEe', "s/E/\\=substitute(submatch(0), '.', '\\\\\<C-V>\<C-M>', '')/",
+	      \				["e\\\<C-V>", 'e']],
+	      \ ['fFf', "s/F/\\=substitute(submatch(0), '.', '\\r', '')/",
+	      \				['f', 'f']],
+	      \ ['gGg', 's/G/\=substitute(submatch(0), ".", "\<C-V>\<C-J>", "")/',
+	      \				["g\<C-V>", 'g']],
+	      \ ['hHh', 's/H/\=substitute(submatch(0), ".", "\\\<C-V>\<C-J>", "")/',
+	      \				["h\<C-V>", 'h']],
+	      \ ['iIi', 's/I/\=substitute(submatch(0), ".", "\\\\\<C-V>\<C-J>", "")/',
+	      \				["i\\\<C-V>", 'i']],
+	      \ ['jJj', "s/J/\\=substitute(submatch(0), '.', '\\n', '')/",
+	      \				['j', 'j']],
+	      \ ['kKk', "s/K/\\=substitute(submatch(0), '.', '\\r', '')/",
+	      \				['k', 'k']],
+	      \ ['lLl', "s/L/\\=substitute(submatch(0), '.', '\\n', '')/",
+	      \				['l', 'l']],
+	      \ ]
+  call Run_SubCmd_Tests(tests)
+endfunc
+
+func Test_sub_cmd_5()
+  set magic&
+  set cpo&
+
+  " List entry format: [input, cmd, output]
+  let tests = [ ['A123456789', 's/A\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)/\=submatch(0) . submatch(9) . submatch(8) . submatch(7) . submatch(6) . submatch(5) . submatch(4) . submatch(3) . submatch(2) . submatch(1)/', ['A123456789987654321']],
+	      \ ['B123456789', 's/B\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)\(.\)/\=string([submatch(0, 1), submatch(9, 1), submatch(8, 1), submatch(7, 1), submatch(6, 1), submatch(5, 1), submatch(4, 1), submatch(3, 1), submatch(2, 1), submatch(1, 1)])/', ["[['B123456789'], ['9'], ['8'], ['7'], ['6'], ['5'], ['4'], ['3'], ['2'], ['1']]"]],
+	      \ ]
+  call Run_SubCmd_Tests(tests)
+endfunc
+
+" Test for *:s%* on :substitute.
+func Test_sub_cmd_6()
+  set magic&
+  " Nvim: no "/" flag in 'cpoptions'.
+  " set cpo+=/
+
+  " List entry format: [input, cmd, output]
+  let tests = [ ['A', 's/A/a/', ['a']],
+	      \ ['B', 's/B/%/', ['a']],
+	      \ ]
+  " call Run_SubCmd_Tests(tests)
+
+  set cpo-=/
+  let tests = [ ['C', 's/C/c/', ['c']],
+	      \ ['D', 's/D/%/', ['%']],
+	      \ ]
+  call Run_SubCmd_Tests(tests)
+
+  set cpo&
+endfunc
+
+" Test for :s replacing \n with  line break.
+func Test_sub_cmd_7()
+  set magic&
+  set cpo&
+
+  " List entry format: [input, cmd, output]
+  let tests = [ ["A\<C-V>\<C-M>A", 's/A./\=submatch(0)/', ['A', 'A']],
+	      \ ["B\<C-V>\<C-J>B", 's/B./\=submatch(0)/', ['B', 'B']],
+	      \ ["C\<C-V>\<C-J>C", 's/C./\=strtrans(string(submatch(0, 1)))/', [strtrans("['C\<C-J>']C")]],
+	      \ ["D\<C-V>\<C-J>\nD", 's/D.\nD/\=strtrans(string(submatch(0, 1)))/', [strtrans("['D\<C-J>', 'D']")]],
+	      \ ["E\<C-V>\<C-J>\n\<C-V>\<C-J>\n\<C-V>\<C-J>\n\<C-V>\<C-J>\n\<C-V>\<C-J>E", 's/E\_.\{-}E/\=strtrans(string(submatch(0, 1)))/', [strtrans("['E\<C-J>', '\<C-J>', '\<C-J>', '\<C-J>', '\<C-J>E']")]],
+	      \ ]
+  call Run_SubCmd_Tests(tests)
+
+  exe "normal oQ\nQ\<Esc>k"
+  call assert_fails('s/Q[^\n]Q/\=submatch(0)."foobar"/', 'E486')
+  enew!
+endfunc
+
+func TitleString()
+  let check = 'foo' =~ 'bar'
+  return ""
+endfunc
+
+func Test_sub_cmd_8()
+  set titlestring=%{TitleString()}
+
+  enew!
+  call append(0, ['', 'test_one', 'test_two'])
+  call cursor(1,1)
+  /^test_one/s/.*/\="foo\nbar"/
+  call assert_equal('foo', getline(2))
+  call assert_equal('bar', getline(3))
+  call feedkeys(':/^test_two/s/.*/\="foo\nbar"/c', "t")
+  call feedkeys("\<CR>y", "xt")
+  call assert_equal('foo', getline(4))
+  call assert_equal('bar', getline(5))
+
+  enew!
+  set titlestring&
 endfunc
 
 func Test_sub_cmd_9()
@@ -700,7 +743,7 @@ func Test_sub_highlight_zero_match()
 endfunc
 
 func Test_nocatch_sub_failure_handling()
-  " normal error results in all replacements 
+  " normal error results in all replacements
   func Foo()
     foobar
   endfunc
@@ -763,7 +806,7 @@ func Test_replace_keeppatterns()
   a
 foobar
 
-substitute foo asdf
+substitute foo asdf foo
 
 one two
 .
@@ -772,21 +815,26 @@ one two
   /^substitute
   s/foo/bar/
   call assert_equal('foo', @/)
-  call assert_equal('substitute bar asdf', getline('.'))
+  call assert_equal('substitute bar asdf foo', getline('.'))
 
   /^substitute
   keeppatterns s/asdf/xyz/
   call assert_equal('^substitute', @/)
-  call assert_equal('substitute bar xyz', getline('.'))
+  call assert_equal('substitute bar xyz foo', getline('.'))
+
+  /^substitute
+  &
+  call assert_equal('^substitute', @/)
+  call assert_equal('substitute bar xyz bar', getline('.'))
 
   exe "normal /bar /e\<CR>"
   call assert_equal(15, col('.'))
   normal -
   keeppatterns /xyz
   call assert_equal('bar ', @/)
-  call assert_equal('substitute bar xyz', getline('.'))
+  call assert_equal('substitute bar xyz bar', getline('.'))
   exe "normal 0dn"
-  call assert_equal('xyz', getline('.'))
+  call assert_equal('xyz bar', getline('.'))
 
   close!
 endfunc
@@ -849,7 +897,7 @@ func Test_sub_with_no_last_pat()
     call writefile(v:errors, 'Xresult')
     qall!
   [SCRIPT]
-  call writefile(lines, 'Xscript')
+  call writefile(lines, 'Xscript', 'D')
   if RunVim([], [], '--clean -S Xscript')
     call assert_equal([], readfile('Xresult'))
   endif
@@ -866,7 +914,6 @@ func Test_sub_with_no_last_pat()
   "   call assert_equal([], readfile('Xresult'))
   " endif
 
-  call delete('Xscript')
   call delete('Xresult')
 endfunc
 
@@ -1067,13 +1114,12 @@ func Test_sub_open_cmdline_win()
     redir END
     qall!
   [SCRIPT]
-  call writefile(lines, 'Xscript')
+  call writefile(lines, 'Xscript', 'D')
   if RunVim([], [], '-u NONE -S Xscript')
     call assert_match('E565: Not allowed to change text or change window',
           \ readfile('Xresult')->join('XX'))
   endif
 
-  call delete('Xscript')
   call delete('Xresult')
 endfunc
 
@@ -1408,6 +1454,21 @@ func Test_substitute_short_cmd()
   bw!
 endfunc
 
+" Check handling expanding "~" resulting in extremely long text.
+" FIXME: disabled, it takes too long to run on CI
+"func Test_substitute_tilde_too_long()
+"  enew!
+"
+"  s/.*/ixxx
+"  s//~~~~~~~~~AAAAAAA@(
+"
+"  " Either fails with "out of memory" or "text too long".
+"  " This can take a long time.
+"  call assert_fails('sil! norm &&&&&&&&&', ['E1240:\|E342:'])
+"
+"  bwipe!
+"endfunc
+
 " This should be done last to reveal a memory leak when vim_regsub_both() is
 " called to evaluate an expression but it is not used in a second call.
 func Test_z_substitute_expr_leak()
@@ -1416,6 +1477,53 @@ func Test_z_substitute_expr_leak()
   endfunc
   silent! s/\%')/\=SubExpr()
   delfunc SubExpr
+endfunc
+
+func Test_substitute_expr_switch_win()
+  func R()
+    wincmd x
+    return 'XXXX'
+  endfunc
+  new Xfoobar
+  let bufnr = bufnr('%')
+  put ='abcdef'
+  silent! s/\%')/\=R()
+  call assert_fails(':%s/./\=R()/g', 'E565:')
+  delfunc R
+  exe bufnr .. "bw!"
+endfunc
+
+" recursive call of :s using test-replace special
+func Test_substitute_expr_recursive()
+  func Q()
+    %s/./\='foobar'/gn
+    return "foobar"
+  endfunc
+  func R()
+    %s/./\=Q()/g
+  endfunc
+  new Xfoobar_UAF
+  let bufnr = bufnr('%')
+  put ='abcdef'
+  silent! s/./\=R()/g
+  call assert_fails(':%s/./\=R()/g', 'E565:')
+  delfunc R
+  delfunc Q
+  exe bufnr .. "bw!"
+endfunc
+
+" Test for changing 'cpo' in a substitute expression
+func Test_substitute_expr_cpo()
+  func XSubExpr()
+    set cpo=
+    return 'x'
+  endfunc
+
+  let save_cpo = &cpo
+  call assert_equal('xxx', substitute('abc', '.', '\=XSubExpr()', 'g'))
+  call assert_equal(save_cpo, &cpo)
+
+  delfunc XSubExpr
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

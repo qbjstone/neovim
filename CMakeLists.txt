@@ -1,20 +1,22 @@
 # CMAKE REFERENCE
-#   intro: https://codingnest.com/basic-cmake/
-#   best practices (3.0+): https://gist.github.com/mbinna/c61dbb39bca0e4fb7d1f73b0d66a4fd1
-#   pitfalls: https://izzys.casa/2019/02/everything-you-never-wanted-to-know-about-cmake/
+#   - intro: https://codingnest.com/basic-cmake/
+#   - best practices (3.0+): https://gist.github.com/mbinna/c61dbb39bca0e4fb7d1f73b0d66a4fd1
+#   - pitfalls: https://izzys.casa/2019/02/everything-you-never-wanted-to-know-about-cmake/
+#   - troubleshooting:
+#     - variable_watch https://cmake.org/cmake/help/latest/command/variable_watch.html
+#     - verbose output: cmake --build build --verbose
 
 # Version should match the tested CMAKE_URL in .github/workflows/build.yml.
-cmake_minimum_required(VERSION 3.10)
-
-# Can be removed once minimum version is at least 3.15
-if(POLICY CMP0092)
-  cmake_policy(SET CMP0092 NEW)
-endif()
+cmake_minimum_required(VERSION 3.16)
 
 project(nvim C)
 
-if(POLICY CMP0075)
-  cmake_policy(SET CMP0075 NEW)
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+
+if(XCODE)
+  message(FATAL_ERROR [[Xcode generator is not supported. Use "Ninja" or "Unix Makefiles" instead]])
 endif()
 
 # Point CMake at any custom modules we may ship
@@ -22,21 +24,44 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 include(CheckCCompilerFlag)
 include(CheckCSourceCompiles)
+include(CheckLibraryExists)
+include(ExternalProject)
 include(FindPackageHandleStandardArgs)
+include(GNUInstallDirs)
+
+include(Deps)
+include(Find)
 include(InstallHelpers)
-include(LuaHelpers)
 include(PreventInTreeBuilds)
 include(Util)
 
-set(TOUCHES_DIR ${PROJECT_BINARY_DIR}/touches)
+#-------------------------------------------------------------------------------
+# User settings
+#-------------------------------------------------------------------------------
 
-find_program(CCACHE_PRG ccache)
-if(CCACHE_PRG)
-  set(CMAKE_C_COMPILER_LAUNCHER ${CMAKE_COMMAND} -E env CCACHE_SLOPPINESS=pch_defines,time_macros ${CCACHE_PRG})
-endif()
+set(DEPS_IGNORE_SHA FALSE)
+
+#-------------------------------------------------------------------------------
+# Variables
+#-------------------------------------------------------------------------------
+set(FUNCS_DATA ${PROJECT_BINARY_DIR}/funcs_data.mpack)
+set(TOUCHES_DIR ${PROJECT_BINARY_DIR}/touches)
+set(VTERM_TEST_FILE ${PROJECT_BINARY_DIR}/test/vterm_test_output)
+
+file(GLOB DOCFILES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/runtime/doc/*.txt)
 
 if(NOT CI_BUILD)
   set(CMAKE_INSTALL_MESSAGE NEVER)
+endif()
+
+if(${CMAKE_VERSION} VERSION_LESS 3.20)
+  set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
+
+if(${CMAKE_VERSION} VERSION_GREATER_EQUAL 3.26)
+  set(COPY_DIRECTORY copy_directory_if_different)
+else()
+  set(COPY_DIRECTORY copy_directory)
 endif()
 
 # Prefer our bundled versions of dependencies.
@@ -87,10 +112,8 @@ if(APPLE)
 endif()
 
 if(WIN32 OR APPLE)
-  # Ignore case when comparing filenames on Windows and Mac.
+  # Handle case-insensitive filenames for Windows and Mac.
   set(CASE_INSENSITIVE_FILENAME TRUE)
-  # Enable fixing case-insensitive filenames for Windows and Mac.
-  set(USE_FNAME_CASE TRUE)
 endif()
 
 if (MINGW)
@@ -101,28 +124,31 @@ if (MINGW)
 else()
   option(ENABLE_LTO "enable link time optimization" ON)
 endif()
+option(ENABLE_LIBINTL "enable libintl" ON)
+option(ENABLE_WASMTIME "enable wasmtime" OFF)
 
 message(STATUS "CMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}")
 
-set_default_buildtype()
+set_default_buildtype(Debug)
+get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT isMultiConfig)
+  # Unlike build dependencies in cmake.deps, we want dev dependencies such as
+  # Uncrustify to always be built with Release.
+  list(APPEND DEPS_CMAKE_ARGS -D CMAKE_BUILD_TYPE=Release)
+endif()
 
 # If not in a git repo (e.g., a tarball) these tokens define the complete
 # version string, else they are combined with the result of `git describe`.
 set(NVIM_VERSION_MAJOR 0)
-set(NVIM_VERSION_MINOR 10)
+set(NVIM_VERSION_MINOR 11)
 set(NVIM_VERSION_PATCH 0)
 set(NVIM_VERSION_PRERELEASE "-dev") # for package maintainers
 
 # API level
-set(NVIM_API_LEVEL 11)        # Bump this after any API change.
+set(NVIM_API_LEVEL 13)        # Bump this after any API/stdlib change.
 set(NVIM_API_LEVEL_COMPAT 0)  # Adjust this after a _breaking_ API change.
-set(NVIM_API_PRERELEASE false)
+set(NVIM_API_PRERELEASE true)
 
-# Build-type: RelWithDebInfo
-# /Og means something different in MSVC
-if(CMAKE_C_COMPILER_ID MATCHES "GNU" OR CMAKE_C_COMPILER_ID MATCHES "Clang")
-   set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -Og -g")
-endif()
 # We _want_ assertions in RelWithDebInfo build-type.
 if(CMAKE_C_FLAGS_RELWITHDEBINFO MATCHES DNDEBUG)
   string(REPLACE "-DNDEBUG" "" CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO}")
@@ -130,23 +156,15 @@ if(CMAKE_C_FLAGS_RELWITHDEBINFO MATCHES DNDEBUG)
   string(REPLACE "  " " " CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO}") # Remove duplicate whitespace
 endif()
 
-option(LOG_LIST_ACTIONS "Add list actions logging" OFF)
-
 option(ENABLE_ASAN_UBSAN "Enable Clang address & undefined behavior sanitizer for nvim binary." OFF)
-option(LOG_DEBUG "Enable debug log messages even in a release build" OFF)
 option(ENABLE_MSAN "Enable Clang memory sanitizer for nvim binary." OFF)
+# TSAN exists to test Luv threads.
 option(ENABLE_TSAN "Enable Clang thread sanitizer for nvim binary." OFF)
 
 if((ENABLE_ASAN_UBSAN AND ENABLE_MSAN)
     OR (ENABLE_ASAN_UBSAN AND ENABLE_TSAN)
     OR (ENABLE_MSAN AND ENABLE_TSAN))
   message(FATAL_ERROR "Sanitizers cannot be enabled simultaneously")
-endif()
-
-if(ENABLE_ASAN_UBSAN OR ENABLE_MSAN OR ENABLE_TSAN)
-  if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_C_COMPILER_ID MATCHES "GNU")
-    message(FATAL_ERROR "Sanitizers are only supported for Clang and GCC")
-  endif()
 endif()
 
 # Place targets in bin/ or lib/ for all build configurations
@@ -160,23 +178,14 @@ foreach(CFGNAME ${CMAKE_CONFIGURATION_TYPES})
   set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${CFGNAME} ${CMAKE_BINARY_DIR}/lib)
 endforeach()
 
-if(NOT LUA_PRG)
-  foreach(CURRENT_LUA_PRG luajit lua5.1 lua5.2 lua)
-    unset(_CHECK_LUA_PRG CACHE)
-    find_program(_CHECK_LUA_PRG ${CURRENT_LUA_PRG})
-
-    if(_CHECK_LUA_PRG)
-      set(LUA_PRG "${_CHECK_LUA_PRG}" CACHE FILEPATH "Path to a program.")
-      break()
-    endif()
-  endforeach()
-  unset(_CHECK_LUA_PRG CACHE)
+if(NOT PREFER_LUA)
+  find_program(LUA_PRG NAMES luajit)
 endif()
-
+find_program(LUA_PRG NAMES lua5.1 lua5.2 lua)
+mark_as_advanced(LUA_PRG)
 if(NOT LUA_PRG)
   message(FATAL_ERROR "Failed to find a Lua 5.1-compatible interpreter")
 endif()
-
 message(STATUS "Using Lua interpreter: ${LUA_PRG}")
 
 # Some of the code generation still relies on stable table ordering in order to
@@ -187,11 +196,10 @@ message(STATUS "Using Lua interpreter: ${LUA_PRG}")
 if(NOT LUA_GEN_PRG)
   set(LUA_GEN_PRG "${LUA_PRG}" CACHE FILEPATH "Path to the lua used for code generation.")
 endif()
-
+mark_as_advanced(LUA_GEN_PRG)
 message(STATUS "Using Lua interpreter for code generation: ${LUA_GEN_PRG}")
 
 option(COMPILE_LUA "Pre-compile Lua sources into bytecode (for sources that are included in the binary)" ON)
-
 if(COMPILE_LUA AND NOT WIN32)
   if(PREFER_LUA)
     foreach(CURRENT_LUAC_PRG luac5.1 luac)
@@ -208,35 +216,39 @@ if(COMPILE_LUA AND NOT WIN32)
     endif()
   endif()
 endif()
-
+mark_as_advanced(LUAC_PRG)
 if(LUAC_PRG)
   message(STATUS "Using Lua compiler: ${LUAC_PRG}")
 endif()
 
-#
 # Lint
-#
-find_program(LUACHECK_PRG luacheck)
-find_program(SHELLCHECK_PRG shellcheck)
-find_program(STYLUA_PRG stylua)
-find_program(UNCRUSTIFY_PRG uncrustify)
+option(CI_LINT "Abort if lint programs not found" OFF)
+if(CI_LINT)
+  set(LINT_REQUIRED "REQUIRED")
+endif()
+find_program(SHELLCHECK_PRG shellcheck ${LINT_REQUIRED})
+mark_as_advanced(SHELLCHECK_PRG)
+find_program(STYLUA_PRG stylua ${LINT_REQUIRED})
+mark_as_advanced(STYLUA_PRG)
+
+set(STYLUA_DIRS runtime scripts src test contrib)
 
 add_glob_target(
-  REQUIRED
   TARGET lintlua-luacheck
-  COMMAND ${LUACHECK_PRG}
-  FLAGS -q
-  GLOB_DIRS runtime/ scripts/ src/ test/
+  COMMAND $<TARGET_FILE:nvim_bin>
+  FLAGS -ll ${PROJECT_SOURCE_DIR}/test/lua_runner.lua ${CMAKE_BINARY_DIR}/usr luacheck -q
+  GLOB_DIRS runtime scripts src test
   GLOB_PAT *.lua
-  TOUCH_STRATEGY SINGLE)
+  TOUCH_STRATEGY PER_DIR)
+add_dependencies(lintlua-luacheck lua_dev_deps)
 
 add_glob_target(
   TARGET lintlua-stylua
   COMMAND ${STYLUA_PRG}
-  FLAGS --color=always --check
-  GLOB_DIRS runtime/
+  FLAGS --color=always --check --respect-ignores
+  GLOB_DIRS ${STYLUA_DIRS}
   GLOB_PAT *.lua
-  TOUCH_STRATEGY SINGLE)
+  TOUCH_STRATEGY PER_DIR)
 
 add_custom_target(lintlua)
 add_dependencies(lintlua lintlua-luacheck lintlua-stylua)
@@ -247,26 +259,23 @@ add_glob_target(
   FLAGS -x -a
   GLOB_DIRS scripts
   GLOB_PAT *.sh
-  EXCLUDE
-    scripts/pvscheck.sh
-  TOUCH_STRATEGY SINGLE)
+  TOUCH_STRATEGY PER_DIR)
 
 add_custom_target(lintcommit
-  COMMAND $<TARGET_FILE:nvim> -u NONE -l ${PROJECT_SOURCE_DIR}/scripts/lintcommit.lua main)
-add_dependencies(lintcommit nvim)
+  COMMAND $<TARGET_FILE:nvim_bin> -u NONE -l ${PROJECT_SOURCE_DIR}/scripts/lintcommit.lua main)
+add_dependencies(lintcommit nvim_bin)
 
 add_custom_target(lint)
-add_dependencies(lint clang-tidy lintc lintlua lintsh lintcommit)
+add_dependencies(lint lintc lintlua lintsh)
 
-#
 # Format
-#
-add_custom_target(formatlua
-  COMMAND ${CMAKE_COMMAND}
-    -D FORMAT_PRG=${STYLUA_PRG}
-    -D LANG=lua
-    -P ${PROJECT_SOURCE_DIR}/cmake/Format.cmake
-  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+add_glob_target(
+  TARGET formatlua
+  COMMAND ${STYLUA_PRG}
+  FLAGS --respect-ignores
+  GLOB_DIRS ${STYLUA_DIRS}
+  GLOB_PAT *.lua
+  TOUCH_STRATEGY PER_DIR)
 
 add_custom_target(format)
 add_dependencies(format formatc formatlua)
@@ -275,21 +284,13 @@ install_helper(
   FILES ${CMAKE_SOURCE_DIR}/src/man/nvim.1
   DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
-if(EXISTS "${DEPS_PREFIX}/share/nvim-qt")
-  option(USE_BUNDLED_NVIMQT "Bundle neovim-qt" ON)
-else()
-  option(USE_BUNDLED_NVIMQT "Bundle neovim-qt" OFF)
-endif()
+add_custom_target(nvim ALL)
+add_dependencies(nvim nvim_bin nvim_runtime_deps nvim_runtime)
 
 add_subdirectory(src/nvim)
 add_subdirectory(cmake.config)
 add_subdirectory(runtime)
 add_subdirectory(test)
-if(WIN32 AND USE_BUNDLED_NVIMQT)
-  install_helper(
-    FILES ${DEPS_PREFIX}/share/nvim-qt/runtime/plugin/nvim_gui_shim.vim
-    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/nvim-qt/runtime/plugin)
-endif()
 
 add_custom_target(uninstall
   COMMAND ${CMAKE_COMMAND} -P ${PROJECT_SOURCE_DIR}/cmake/UninstallHelper.cmake)
@@ -297,3 +298,59 @@ add_custom_target(uninstall
 if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
   add_subdirectory(cmake.packaging)
 endif()
+
+get_externalproject_options(uncrustify ${DEPS_IGNORE_SHA})
+ExternalProject_Add(uncrustify
+  DOWNLOAD_DIR ${DEPS_DOWNLOAD_DIR}/uncrustify
+  CMAKE_ARGS ${DEPS_CMAKE_ARGS}
+    -D CMAKE_RUNTIME_OUTPUT_DIRECTORY=${DEPS_BIN_DIR}
+  EXCLUDE_FROM_ALL TRUE
+  ${EXTERNALPROJECT_OPTIONS})
+
+option(USE_BUNDLED_BUSTED "Use bundled busted" ON)
+if(USE_BUNDLED_BUSTED)
+  get_externalproject_options(lua_dev_deps ${DEPS_IGNORE_SHA})
+  ExternalProject_Add(lua_dev_deps
+    DOWNLOAD_DIR ${DEPS_DOWNLOAD_DIR}/lua_dev_deps
+    SOURCE_DIR ${DEPS_SHARE_DIR}
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND ""
+    INSTALL_COMMAND ""
+    EXCLUDE_FROM_ALL TRUE
+    ${EXTERNALPROJECT_OPTIONS})
+else()
+  add_custom_target(lua_dev_deps)
+endif()
+
+if (CMAKE_SYSTEM_PROCESSOR MATCHES arm64)
+  set(LUALS_ARCH arm64)
+else()
+  set(LUALS_ARCH x64)
+endif()
+
+set(LUALS_VERSION 3.13.6)
+set(LUALS "lua-language-server-${LUALS_VERSION}-${CMAKE_SYSTEM_NAME}-${LUALS_ARCH}")
+set(LUALS_TARBALL ${LUALS}.tar.gz)
+set(LUALS_URL https://github.com/LuaLS/lua-language-server/releases/download/${LUALS_VERSION}/${LUALS_TARBALL})
+
+ExternalProject_Add(download_luals
+  URL ${LUALS_URL}
+  DOWNLOAD_DIR ${DEPS_DOWNLOAD_DIR}/luals
+  SOURCE_DIR ${DEPS_BIN_DIR}/luals
+  CONFIGURE_COMMAND ""
+  BUILD_COMMAND ""
+  INSTALL_COMMAND ""
+  EXCLUDE_FROM_ALL TRUE
+  DOWNLOAD_NO_PROGRESS TRUE
+  CMAKE_CACHE_ARGS ${DEPS_CMAKE_CACHE_ARGS})
+
+file(GLOB_RECURSE LUAFILES runtime/*.lua)
+add_target(luals
+  COMMAND ${DEPS_BIN_DIR}/luals/bin/lua-language-server
+    --configpath=${PROJECT_SOURCE_DIR}/.luarc.json
+    --check=${PROJECT_SOURCE_DIR}/runtime
+    --checklevel=Hint
+  DEPENDS ${LUAFILES}
+  CUSTOM_COMMAND_ARGS USES_TERMINAL)
+
+add_dependencies(luals download_luals)
