@@ -1,23 +1,19 @@
-#ifndef NVIM_EVAL_USERFUNC_H
-#define NVIM_EVAL_USERFUNC_H
+#pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "nvim/eval.h"
-#include "nvim/eval/typval.h"
+#include "nvim/cmdexpand_defs.h"  // IWYU pragma: keep
 #include "nvim/eval/typval_defs.h"
-#include "nvim/ex_cmds_defs.h"
-#include "nvim/garray.h"
-#include "nvim/hashtab.h"
-#include "nvim/pos.h"
-#include "nvim/types.h"
-
-struct funccal_entry;
+#include "nvim/eval_defs.h"  // IWYU pragma: keep
+#include "nvim/ex_cmds_defs.h"  // IWYU pragma: keep
+#include "nvim/hashtab_defs.h"  // IWYU pragma: keep
+#include "nvim/pos_defs.h"
+#include "nvim/types_defs.h"  // IWYU pragma: keep
 
 // From user function to hashitem and back.
 #define UF2HIKEY(fp) ((fp)->uf_name)
-#define HIKEY2UF(p)  ((ufunc_T *)(p - offsetof(ufunc_T, uf_name)))
+#define HIKEY2UF(p)  ((ufunc_T *)((p) - offsetof(ufunc_T, uf_name)))
 #define HI2UF(hi)    HIKEY2UF((hi)->hi_key)
 
 // flags used in uf_flags
@@ -36,9 +32,9 @@ struct funccal_entry;
 
 /// Structure used by trans_function_name()
 typedef struct {
-  dict_T *fd_dict;  ///< Dictionary used.
-  char *fd_newkey;  ///< New key in "dict" in allocated memory.
-  dictitem_T *fd_di;  ///< Dictionary item used.
+  dict_T *fd_dict;    ///< Dict used.
+  char *fd_newkey;    ///< New key in "dict" in allocated memory.
+  dictitem_T *fd_di;  ///< Dict item used.
 } funcdict_T;
 
 typedef struct funccal_entry funccal_entry_T;
@@ -73,7 +69,7 @@ typedef struct {
   bool *fe_doesrange;     ///< [out] if not NULL: function handled range
   bool fe_evaluate;       ///< actually evaluate expressions
   partial_T *fe_partial;  ///< for extra arguments
-  dict_T *fe_selfdict;    ///< Dictionary for "self"
+  dict_T *fe_selfdict;    ///< Dict for "self"
   typval_T *fe_basetv;    ///< base for base->method()
   bool fe_found_var;      ///< if the function is not found then give an
                           ///< error that a variable is not callable.
@@ -97,4 +93,3 @@ typedef struct {
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "eval/userfunc.h.generated.h"
 #endif
-#endif  // NVIM_EVAL_USERFUNC_H

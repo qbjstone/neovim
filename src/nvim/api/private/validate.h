@@ -1,8 +1,12 @@
-#ifndef NVIM_API_PRIVATE_VALIDATE_H
-#define NVIM_API_PRIVATE_VALIDATE_H
+#pragma once
 
-#include "nvim/api/private/defs.h"
+#include <stdbool.h>
+#include <stddef.h>
+
+#include "nvim/api/private/defs.h"  // IWYU pragma: keep
 #include "nvim/api/private/helpers.h"
+#include "nvim/assert_defs.h"
+#include "nvim/macros_defs.h"
 
 #define VALIDATE(cond, fmt_, fmt_arg1, code) \
   do { \
@@ -38,7 +42,7 @@
 
 #define VALIDATE_T(name, expected_t, actual_t, code) \
   do { \
-    STATIC_ASSERT(expected_t != kObjectTypeDictionary, "use VALIDATE_T_DICT"); \
+    STATIC_ASSERT(expected_t != kObjectTypeDict, "use VALIDATE_T_DICT"); \
     if (expected_t != actual_t) { \
       api_err_exp(err, name, api_typename(expected_t), api_typename(actual_t)); \
       code; \
@@ -48,7 +52,7 @@
 /// Checks that `obj_` has type `expected_t`.
 #define VALIDATE_T2(obj_, expected_t, code) \
   do { \
-    STATIC_ASSERT(expected_t != kObjectTypeDictionary, "use VALIDATE_T_DICT"); \
+    STATIC_ASSERT(expected_t != kObjectTypeDict, "use VALIDATE_T_DICT"); \
     if ((obj_).type != expected_t) { \
       api_err_exp(err, STR(obj_), api_typename(expected_t), api_typename((obj_).type)); \
       code; \
@@ -58,11 +62,11 @@
 /// Checks that `obj_` has Dict type. Also allows empty Array in a Lua context.
 #define VALIDATE_T_DICT(name, obj_, code) \
   do { \
-    if ((obj_).type != kObjectTypeDictionary \
+    if ((obj_).type != kObjectTypeDict \
         && !(channel_id == LUA_INTERNAL_CALL \
              && (obj_).type == kObjectTypeArray \
              && (obj_).data.array.size == 0)) { \
-      api_err_exp(err, name, api_typename(kObjectTypeDictionary), api_typename((obj_).type)); \
+      api_err_exp(err, name, api_typename(kObjectTypeDict), api_typename((obj_).type)); \
       code; \
     } \
   } while (0)
@@ -90,5 +94,3 @@
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "api/private/validate.h.generated.h"
 #endif
-
-#endif  // NVIM_API_PRIVATE_VALIDATE_H

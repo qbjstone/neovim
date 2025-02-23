@@ -1,42 +1,51 @@
-// This is an open source non-commercial project. Dear PVS-Studio, please check
-// it. PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
-
 #include <assert.h>
 #include <limits.h>
 #include <stdbool.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uv.h>
 
-#include "klib/kvec.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/private/validate.h"
 #include "nvim/api/ui.h"
-#include "nvim/ascii.h"
+#include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
+#include "nvim/buffer.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/cursor_shape.h"
 #include "nvim/drawscreen.h"
+#include "nvim/event/multiqueue.h"
 #include "nvim/ex_getln.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/grid.h"
 #include "nvim/highlight.h"
 #include "nvim/highlight_defs.h"
 #include "nvim/log.h"
 #include "nvim/lua/executor.h"
-#include "nvim/map.h"
+#include "nvim/map_defs.h"
 #include "nvim/memory.h"
+#include "nvim/memory_defs.h"
 #include "nvim/message.h"
 #include "nvim/option.h"
+#include "nvim/option_defs.h"
+#include "nvim/option_vars.h"
+#include "nvim/os/os_defs.h"
 #include "nvim/os/time.h"
+#include "nvim/state_defs.h"
 #include "nvim/strings.h"
 #include "nvim/ui.h"
 #include "nvim/ui_client.h"
 #include "nvim/ui_compositor.h"
-#include "nvim/vim.h"
 #include "nvim/window.h"
+#include "nvim/winfloat.h"
+
+typedef struct {
+  LuaRef cb;
+  uint8_t errors;
+  bool ext_widgets[kUIGlobalCount];
+} UIEventCallback;
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "ui.c.generated.h"
@@ -44,7 +53,7 @@
 
 #define MAX_UI_COUNT 16
 
-static UI *uis[MAX_UI_COUNT];
+static RemoteUI *uis[MAX_UI_COUNT];
 static bool ui_ext[kUIExtCount] = { 0 };
 static size_t ui_count = 0;
 static int ui_mode_idx = SHAPE_IDX_N;
@@ -60,8 +69,7 @@ bool ui_cb_ext[kUIExtCount];  ///< Internalized UI capabilities.
 
 static bool has_mouse = false;
 static int pending_has_mouse = -1;
-
-static Array call_buf = ARRAY_DICT_INIT;
+static bool pending_default_colors = false;
 
 #ifdef NVIM_LOG_DEBUG
 static size_t uilog_seen = 0;
@@ -98,7 +106,7 @@ static void ui_log(const char *funname)
   do { \
     bool any_call = false; \
     for (size_t i = 0; i < ui_count; i++) { \
-      UI *ui = uis[i]; \
+      RemoteUI *ui = uis[i]; \
       if ((cond)) { \
         remote_ui_##funname(__VA_ARGS__); \
         any_call = true; \
@@ -118,30 +126,33 @@ void ui_init(void)
   default_grid.handle = 1;
   msg_grid_adj.target = &default_grid;
   ui_comp_init();
-  kv_ensure_space(call_buf, 16);
 }
 
 #ifdef EXITFREE
 void ui_free_all_mem(void)
 {
-  kv_destroy(call_buf);
-
   UIEventCallback *event_cb;
   map_foreach_value(&ui_event_cbs, event_cb, {
     free_ui_event_callback(event_cb);
   })
-  pmap_destroy(uint32_t)(&ui_event_cbs);
+  map_destroy(uint32_t, &ui_event_cbs);
+
+  multiqueue_free(resize_events);
 }
 #endif
 
 /// Returns true if any `rgb=true` UI is attached.
 bool ui_rgb_attached(void)
 {
-  if (!headless_mode && p_tgc) {
+  if (p_tgc) {
     return true;
   }
   for (size_t i = 0; i < ui_count; i++) {
-    if (uis[i]->rgb) {
+    // We do not consider the TUI in this loop because we already checked for 'termguicolors' at the
+    // beginning of this function. In this loop, we are checking to see if any _other_ UIs which
+    // support RGB are attached.
+    bool tui = uis[i]->stdin_tty || uis[i]->stdout_tty;
+    if (!tui && uis[i]->rgb) {
       return true;
     }
   }
@@ -171,15 +182,51 @@ bool ui_override(void)
   return false;
 }
 
-bool ui_active(void)
+/// Gets the number of UIs connected to this server.
+size_t ui_active(void)
 {
-  return ui_count > 0;
+  return ui_count;
 }
 
 void ui_refresh(void)
 {
   if (ui_client_channel_id) {
     abort();
+  }
+
+  int width = INT_MAX;
+  int height = INT_MAX;
+  bool ext_widgets[kUIExtCount];
+  bool inclusive = ui_override();
+  memset(ext_widgets, !!ui_active(), ARRAY_SIZE(ext_widgets));
+
+  for (size_t i = 0; i < ui_count; i++) {
+    RemoteUI *ui = uis[i];
+    width = MIN(ui->width, width);
+    height = MIN(ui->height, height);
+    for (UIExtension j = 0; (int)j < kUIExtCount; j++) {
+      ext_widgets[j] &= (ui->ui_ext[j] || inclusive);
+    }
+  }
+
+  cursor_row = cursor_col = 0;
+  pending_cursor_update = true;
+
+  bool had_message = ui_ext[kUIMessages];
+  for (UIExtension i = 0; (int)i < kUIExtCount; i++) {
+    ui_ext[i] = ext_widgets[i] | ui_cb_ext[i];
+    if (i < kUIGlobalCount) {
+      ui_call_option_set(cstr_as_string(ui_ext_names[i]), BOOLEAN_OBJ(ui_ext[i]));
+    }
+  }
+
+  // Reset 'cmdheight' for all tabpages when ext_messages toggles.
+  if (had_message != ui_ext[kUIMessages]) {
+    set_option_value(kOptCmdheight, NUMBER_OPTVAL(had_message), 0);
+    FOR_ALL_TABS(tp) {
+      tp->tp_ch_used = had_message;
+    }
+    msg_scroll_flush();
   }
 
   if (!ui_active()) {
@@ -191,36 +238,6 @@ void ui_refresh(void)
     return;
   }
 
-  int width = INT_MAX, height = INT_MAX;
-  bool ext_widgets[kUIExtCount];
-  for (UIExtension i = 0; (int)i < kUIExtCount; i++) {
-    ext_widgets[i] = true;
-  }
-
-  bool inclusive = ui_override();
-  for (size_t i = 0; i < ui_count; i++) {
-    UI *ui = uis[i];
-    width = MIN(ui->width, width);
-    height = MIN(ui->height, height);
-    for (UIExtension j = 0; (int)j < kUIExtCount; j++) {
-      ext_widgets[j] &= (ui->ui_ext[j] || inclusive);
-    }
-  }
-
-  cursor_row = cursor_col = 0;
-  pending_cursor_update = true;
-
-  for (UIExtension i = 0; (int)i < kUIExtCount; i++) {
-    if (i < kUIGlobalCount) {
-      ext_widgets[i] |= ui_cb_ext[i];
-    }
-    ui_ext[i] = ext_widgets[i];
-    if (i < kUIGlobalCount) {
-      ui_call_option_set(cstr_as_string((char *)ui_ext_names[i]),
-                         BOOLEAN_OBJ(ext_widgets[i]));
-    }
-  }
-
   ui_default_colors_set();
 
   int save_p_lz = p_lz;
@@ -228,10 +245,6 @@ void ui_refresh(void)
   screen_resize(width, height);
   p_lz = save_p_lz;
 
-  if (ext_widgets[kUIMessages]) {
-    set_option_value("cmdheight", 0L, NULL, 0);
-    command_height();
-  }
   ui_mode_info_set();
   pending_mode_update = true;
   ui_cursor_shape();
@@ -273,13 +286,26 @@ static void ui_refresh_event(void **argv)
 
 void ui_schedule_refresh(void)
 {
-  multiqueue_put(resize_events, ui_refresh_event, 0);
+  multiqueue_put(resize_events, ui_refresh_event, NULL);
 }
 
 void ui_default_colors_set(void)
 {
-  ui_call_default_colors_set(normal_fg, normal_bg, normal_sp,
-                             cterm_normal_fg_color, cterm_normal_bg_color);
+  // Throttle setting of default colors at startup, so it only happens once
+  // if the user sets the colorscheme in startup.
+  pending_default_colors = true;
+  if (starting == 0) {
+    ui_may_set_default_colors();
+  }
+}
+
+static void ui_may_set_default_colors(void)
+{
+  if (pending_default_colors) {
+    pending_default_colors = false;
+    ui_call_default_colors_set(normal_fg, normal_bg, normal_sp,
+                               cterm_normal_fg_color, cterm_normal_bg_color);
+  }
 }
 
 void ui_busy_start(void)
@@ -298,7 +324,7 @@ void ui_busy_stop(void)
 
 /// Emit a bell or visualbell as a warning
 ///
-/// val is one of the BO_ values, e.g., BO_OPER
+/// val is one of the OptBoFlags values, e.g., kOptBoFlagOperator
 void vim_beep(unsigned val)
 {
   called_vim_beep = true;
@@ -307,7 +333,7 @@ void vim_beep(unsigned val)
     return;
   }
 
-  if (!((bo_flags & val) || (bo_flags & BO_ALL))) {
+  if (!((bo_flags & val) || (bo_flags & kOptBoFlagAll))) {
     static int beeps = 0;
     static uint64_t start_time = 0;
 
@@ -331,12 +357,21 @@ void vim_beep(unsigned val)
   // a script or executing a function give the user a hint where the beep
   // comes from.
   if (vim_strchr(p_debug, 'e') != NULL) {
-    msg_source(HL_ATTR(HLF_W));
-    msg_attr(_("Beep!"), HL_ATTR(HLF_W));
+    msg_source(HLF_W);
+    msg(_("Beep!"), HLF_W);
   }
 }
 
-void ui_attach_impl(UI *ui, uint64_t chanid)
+/// Trigger UIEnter for all attached UIs.
+/// Used on startup after VimEnter.
+void do_autocmd_uienter_all(void)
+{
+  for (size_t i = 0; i < ui_count; i++) {
+    do_autocmd_uienter(uis[i]->channel_id, true);
+  }
+}
+
+void ui_attach_impl(RemoteUI *ui, uint64_t chanid)
 {
   if (ui_count == MAX_UI_COUNT) {
     abort();
@@ -348,6 +383,13 @@ void ui_attach_impl(UI *ui, uint64_t chanid)
 
   uis[ui_count++] = ui;
   ui_refresh_options();
+  resettitle();
+
+  char cwd[MAXPATHL];
+  size_t cwdlen = sizeof(cwd);
+  if (uv_cwd(cwd, &cwdlen) == 0) {
+    ui_call_chdir((String){ .data = cwd, .size = cwdlen });
+  }
 
   for (UIExtension i = kUIGlobalCount; (int)i < kUIExtCount; i++) {
     ui_set_ext_option(ui, i, ui->ui_ext[i]);
@@ -365,7 +407,7 @@ void ui_attach_impl(UI *ui, uint64_t chanid)
   do_autocmd_uienter(chanid, true);
 }
 
-void ui_detach_impl(UI *ui, uint64_t chanid)
+void ui_detach_impl(RemoteUI *ui, uint64_t chanid)
 {
   size_t shift_index = MAX_UI_COUNT;
 
@@ -401,30 +443,31 @@ void ui_detach_impl(UI *ui, uint64_t chanid)
   do_autocmd_uienter(chanid, false);
 }
 
-void ui_set_ext_option(UI *ui, UIExtension ext, bool active)
+void ui_set_ext_option(RemoteUI *ui, UIExtension ext, bool active)
 {
   if (ext < kUIGlobalCount) {
     ui_refresh();
     return;
   }
   if (ui_ext_names[ext][0] != '_' || active) {
-    remote_ui_option_set(ui, cstr_as_string((char *)ui_ext_names[ext]),
-                         BOOLEAN_OBJ(active));
+    remote_ui_option_set(ui, cstr_as_string(ui_ext_names[ext]), BOOLEAN_OBJ(active));
   }
   if (ext == kUITermColors) {
     ui_default_colors_set();
   }
 }
 
-void ui_line(ScreenGrid *grid, int row, int startcol, int endcol, int clearcol, int clearattr,
-             bool wrap)
+void ui_line(ScreenGrid *grid, int row, bool invalid_row, int startcol, int endcol, int clearcol,
+             int clearattr, bool wrap)
 {
   assert(0 <= row && row < grid->rows);
   LineFlags flags = wrap ? kLineFlagWrap : 0;
-  if (startcol == -1) {
-    startcol = 0;
+  if (startcol == 0 && invalid_row) {
     flags |= kLineFlagInvalid;
   }
+
+  // set default colors now so that that text won't have to be repainted later
+  ui_may_set_default_colors();
 
   size_t off = grid->line_offset[row] + (size_t)startcol;
 
@@ -433,12 +476,12 @@ void ui_line(ScreenGrid *grid, int row, int startcol, int endcol, int clearcol, 
                    (const sattr_T *)grid->attrs + off);
 
   // 'writedelay': flush & delay each time.
-  if (p_wd && (rdb_flags & RDB_LINE)) {
+  if (p_wd && (rdb_flags & kOptRdbFlagLine)) {
     // If 'writedelay' is active, set the cursor to indicate what was drawn.
     ui_call_grid_cursor_goto(grid->handle, row,
                              MIN(clearcol, (int)grid->cols - 1));
     ui_call_flush();
-    uint64_t wd = (uint64_t)labs(p_wd);
+    uint64_t wd = (uint64_t)llabs(p_wd);
     os_sleep(wd);
     pending_cursor_update = true;  // restore the cursor later
   }
@@ -520,8 +563,8 @@ void ui_flush(void)
   }
   ui_call_flush();
 
-  if (p_wd && (rdb_flags & RDB_FLUSH)) {
-    os_sleep((uint64_t)labs(p_wd));
+  if (p_wd && (rdb_flags & kOptRdbFlagFlush)) {
+    os_sleep((uint64_t)llabs(p_wd));
   }
 }
 
@@ -581,7 +624,7 @@ void ui_check_mouse(void)
 /// Check if current mode has changed.
 ///
 /// May update the shape of the cursor.
-void ui_cursor_shape(void)
+void ui_cursor_shape_no_check_conceal(void)
 {
   if (!full_screen) {
     return;
@@ -592,6 +635,15 @@ void ui_cursor_shape(void)
     ui_mode_idx = new_mode_idx;
     pending_mode_update = true;
   }
+}
+
+/// Check if current mode has changed.
+///
+/// May update the shape of the cursor.
+/// With concealing on, may conceal or unconceal the cursor line.
+void ui_cursor_shape(void)
+{
+  ui_cursor_shape_no_check_conceal();
   conceal_check_cursor_line();
 }
 
@@ -601,31 +653,35 @@ bool ui_has(UIExtension ext)
   return ui_ext[ext];
 }
 
-Array ui_array(void)
+Array ui_array(Arena *arena)
 {
-  Array all_uis = ARRAY_DICT_INIT;
+  Array all_uis = arena_array(arena, ui_count);
   for (size_t i = 0; i < ui_count; i++) {
-    UI *ui = uis[i];
-    Dictionary info = ARRAY_DICT_INIT;
-    PUT(info, "width", INTEGER_OBJ(ui->width));
-    PUT(info, "height", INTEGER_OBJ(ui->height));
-    PUT(info, "rgb", BOOLEAN_OBJ(ui->rgb));
-    PUT(info, "override", BOOLEAN_OBJ(ui->override));
+    RemoteUI *ui = uis[i];
+    Dict info = arena_dict(arena, 10 + kUIExtCount);
+    PUT_C(info, "width", INTEGER_OBJ(ui->width));
+    PUT_C(info, "height", INTEGER_OBJ(ui->height));
+    PUT_C(info, "rgb", BOOLEAN_OBJ(ui->rgb));
+    PUT_C(info, "override", BOOLEAN_OBJ(ui->override));
 
     // TUI fields. (`stdin_fd` is intentionally omitted.)
-    PUT(info, "term_name", STRING_OBJ(cstr_to_string(ui->term_name)));
-    PUT(info, "term_background", STRING_OBJ(cstr_to_string(ui->term_background)));
-    PUT(info, "term_colors", INTEGER_OBJ(ui->term_colors));
-    PUT(info, "stdin_tty", BOOLEAN_OBJ(ui->stdin_tty));
-    PUT(info, "stdout_tty", BOOLEAN_OBJ(ui->stdout_tty));
+    PUT_C(info, "term_name", CSTR_AS_OBJ(ui->term_name));
+
+    // term_background is deprecated. Populate with an empty string
+    PUT_C(info, "term_background", STATIC_CSTR_AS_OBJ(""));
+
+    PUT_C(info, "term_colors", INTEGER_OBJ(ui->term_colors));
+    PUT_C(info, "stdin_tty", BOOLEAN_OBJ(ui->stdin_tty));
+    PUT_C(info, "stdout_tty", BOOLEAN_OBJ(ui->stdout_tty));
 
     for (UIExtension j = 0; j < kUIExtCount; j++) {
       if (ui_ext_names[j][0] != '_' || ui->ui_ext[j]) {
-        PUT(info, ui_ext_names[j], BOOLEAN_OBJ(ui->ui_ext[j]));
+        PUT_C(info, (char *)ui_ext_names[j], BOOLEAN_OBJ(ui->ui_ext[j]));
       }
     }
-    remote_ui_inspect(ui, &info);
-    ADD(all_uis, DICTIONARY_OBJ(info));
+    PUT_C(info, "chan", INTEGER_OBJ((Integer)ui->channel_id));
+
+    ADD_C(all_uis, DICT_OBJ(info));
   }
   return all_uis;
 }
@@ -644,9 +700,9 @@ void ui_grid_resize(handle_T grid_handle, int width, int height, Error *err)
 
   if (wp->w_floating) {
     if (width != wp->w_width || height != wp->w_height) {
-      wp->w_float_config.width = width;
-      wp->w_float_config.height = height;
-      win_config_float(wp, wp->w_float_config);
+      wp->w_config.width = width;
+      wp->w_config.height = height;
+      win_config_float(wp, wp->w_config);
     }
   } else {
     // non-positive indicates no request
@@ -656,18 +712,31 @@ void ui_grid_resize(handle_T grid_handle, int width, int height, Error *err)
   }
 }
 
-void ui_call_event(char *name, Array args)
+void ui_call_event(char *name, bool fast, Array args)
 {
-  UIEventCallback *event_cb;
   bool handled = false;
-  map_foreach_value(&ui_event_cbs, event_cb, {
+  UIEventCallback *event_cb;
+
+  // Return prompt is still a non-fast event, other prompt messages are
+  // followed by a "cmdline_show" event.
+  if (strcmp(name, "msg_show") == 0) {
+    fast = !strequal(args.items[0].data.string.data, "return_prompt");
+  }
+
+  map_foreach(&ui_event_cbs, ui_event_ns_id, event_cb, {
     Error err = ERROR_INIT;
-    Object res = nlua_call_ref(event_cb->cb, name, args, false, &err);
-    if (res.type == kObjectTypeBoolean && res.data.boolean == true) {
+    uint32_t ns_id = ui_event_ns_id;
+    Object res = nlua_call_ref_ctx(fast, event_cb->cb, name, args, kRetNilBool, NULL, &err);
+    ui_event_ns_id = 0;
+    // TODO(bfredl/luukvbaal): should this be documented or reconsidered?
+    // Why does truthy return from Lua callback mean remote UI should not receive
+    // the event.
+    if (LUARET_TRUTHY(res)) {
       handled = true;
     }
     if (ERROR_SET(&err)) {
-      ELOG("Error while executing ui_comp_event callback: %s", err.msg);
+      ELOG("Error executing UI event callback: %s", err.msg);
+      ui_remove_cb(ns_id, true);
     }
     api_clear_error(&err);
   })
@@ -679,7 +748,7 @@ void ui_call_event(char *name, Array args)
   ui_log(name);
 }
 
-void ui_cb_update_ext(void)
+static void ui_cb_update_ext(void)
 {
   memset(ui_cb_ext, 0, ARRAY_SIZE(ui_cb_ext));
 
@@ -695,7 +764,7 @@ void ui_cb_update_ext(void)
   }
 }
 
-void free_ui_event_callback(UIEventCallback *event_cb)
+static void free_ui_event_callback(UIEventCallback *event_cb)
 {
   api_free_luaref(event_cb->cb);
   xfree(event_cb);
@@ -710,9 +779,9 @@ void ui_add_cb(uint32_t ns_id, LuaRef cb, bool *ext_widgets)
     event_cb->ext_widgets[kUICmdline] = true;
   }
 
-  UIEventCallback **item = (UIEventCallback **)pmap_ref(uint32_t)(&ui_event_cbs, ns_id, true);
+  ptr_t *item = pmap_put_ref(uint32_t)(&ui_event_cbs, ns_id, NULL, NULL);
   if (*item) {
-    free_ui_event_callback(*item);
+    free_ui_event_callback((UIEventCallback *)(*item));
   }
   *item = event_cb;
 
@@ -720,12 +789,16 @@ void ui_add_cb(uint32_t ns_id, LuaRef cb, bool *ext_widgets)
   ui_refresh();
 }
 
-void ui_remove_cb(uint32_t ns_id)
+void ui_remove_cb(uint32_t ns_id, bool checkerr)
 {
-  if (pmap_has(uint32_t)(&ui_event_cbs, ns_id)) {
-    free_ui_event_callback(pmap_get(uint32_t)(&ui_event_cbs, ns_id));
-    pmap_del(uint32_t)(&ui_event_cbs, ns_id);
+  UIEventCallback *item = pmap_get(uint32_t)(&ui_event_cbs, ns_id);
+  if (item && (!checkerr || ++item->errors > 10)) {
+    pmap_del(uint32_t)(&ui_event_cbs, ns_id, NULL);
+    free_ui_event_callback(item);
+    ui_cb_update_ext();
+    ui_refresh();
+    if (checkerr) {
+      msg_schedule_semsg("Excessive errors in vim.ui_attach() callback from ns: %d.", ns_id);
+    }
   }
-  ui_cb_update_ext();
-  ui_refresh();
 }

@@ -5,7 +5,8 @@
 
 -- Ignore "value assigned to a local variable is unused" because
 --  we can't guarantee that local variables will be used by plugins
--- luacheck: ignore 311
+-- luacheck: ignore
+--- @diagnostic disable
 
 local vim9 = require('_vim9script')
 local M = {}
@@ -24,10 +25,11 @@ local SearchMembers = nil
 -- vim9script
 
 -- # Vim completion script
--- # Language:     C
--- # Maintainer:   Bram Moolenaar <Bram@vim.org>
+-- # Language:	C
+-- # Maintainer:	The Vim Project <https://github.com/vim/vim>
+-- # Last Change:	2023 Aug 10
 -- #		Rewritten in Vim9 script by github user lacygoill
--- # Last Change:  2022 Jan 31
+-- # Former Maintainer:   Bram Moolenaar <Bram@vim.org>
 
 prepended = ''
 grepCache = vim.empty_dict()

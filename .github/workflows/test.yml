@@ -8,75 +8,45 @@ on:
     branches:
       - 'master'
       - 'release-[0-9]+.[0-9]+'
-    paths-ignore:
-      - 'contrib/**'
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  ASAN_OPTIONS: detect_leaks=1:check_initialization_order=1:handle_abort=1:handle_sigill=1:log_path=${{ github.workspace }}/build/log/asan:intercept_tls_get_addr=0
+  ASAN_OPTIONS: detect_leaks=1:check_initialization_order=1:log_path=${{ github.workspace }}/build/log/asan:intercept_tls_get_addr=0
   BIN_DIR: ${{ github.workspace }}/bin
   BUILD_DIR: ${{ github.workspace }}/build
   INSTALL_PREFIX: ${{ github.workspace }}/nvim-install
   LOG_DIR: ${{ github.workspace }}/build/log
   NVIM_LOG_FILE: ${{ github.workspace }}/build/.nvimlog
   TSAN_OPTIONS: log_path=${{ github.workspace }}/build/log/tsan
-  UBSAN_OPTIONS: "print_stacktrace=1 log_path=${{ github.workspace }}/build/log/ubsan"
   VALGRIND_LOG: ${{ github.workspace }}/build/log/valgrind-%p.log
   # TEST_FILE: test/functional/core/startup_spec.lua
   # TEST_FILTER: foo
 
 jobs:
   lint:
-    if: (github.event_name == 'pull_request' && github.base_ref == 'master') || (github.event_name == 'push' && github.ref == 'refs/heads/master')
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      CACHE_UNCRUSTIFY: ${{ github.workspace }}/.cache/uncrustify
-      UNCRUSTIFY_VERSION: uncrustify-0.76.0
+      CC: clang
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
 
-      - name: Install dependencies
-        run: ./.github/scripts/install_deps.sh lua-check
-
-      - name: Cache uncrustify
-        id: cache-uncrustify
-        uses: actions/cache@v3
-        with:
-          path: ${{ env.CACHE_UNCRUSTIFY }}
-          key: ${{ env.UNCRUSTIFY_VERSION }}
-
-      - name: Clone uncrustify
-        if: steps.cache-uncrustify.outputs.cache-hit != 'true'
-        uses: actions/checkout@v3
-        with:
-          repository: uncrustify/uncrustify
-          ref: ${{ env.UNCRUSTIFY_VERSION }}
-          path: uncrustify
-
-      - name: Install uncrustify
-        if: steps.cache-uncrustify.outputs.cache-hit != 'true'
+      - name: Install stylua
         run: |
-          source_dir=uncrustify
-          build_dir=uncrustify/build
-          cmake -S $source_dir -B $build_dir -G Ninja -D CMAKE_BUILD_TYPE=Release
-          cmake --build $build_dir
-          mkdir -p .cache
-          cp $build_dir/uncrustify ${{ env.CACHE_UNCRUSTIFY }}
-
-      - uses: ./.github/actions/cache
+          wget --directory-prefix="$BIN_DIR" https://github.com/JohnnyMorganz/StyLua/releases/latest/download/stylua-linux-x86_64.zip
+          (cd "$BIN_DIR"; unzip stylua*.zip)
 
       - name: Build third-party deps
         run: |
           cmake -S cmake.deps -B .deps -G Ninja
           cmake --build .deps
 
-      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        name: configure
-        run: cmake -B build -G Ninja
+      - run: cmake -B build -G Ninja -D CI_LINT=ON
 
       - if: "!cancelled()"
         name: Determine if run should be aborted
@@ -84,12 +54,12 @@ jobs:
         run: echo "status=${{ job.status }}" >> $GITHUB_OUTPUT
 
       - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        name: lintstylua
-        uses: JohnnyMorganz/stylua-action@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          version: latest
-          args: --check runtime/
+        name: stylua
+        run: cmake --build build --target lintlua-stylua
+
+      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
+        name: luals
+        run: cmake --build build --target luals
 
       - if: success() || failure() && steps.abort_job.outputs.status == 'success'
         name: luacheck
@@ -104,135 +74,105 @@ jobs:
         run: cmake --build build --target lintc-clint
 
       - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        run: cmake --build build --target clang-tidy
+        name: clang-tidy
+        run: cmake --build build --target lintc-clang-tidy
 
       - if: success() || failure() && steps.abort_job.outputs.status == 'success'
         name: uncrustify
+        run: cmake --build build --target lintc-uncrustify
+
+  clang-analyzer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Build third-party deps
         run: |
-          ${{ env.CACHE_UNCRUSTIFY }} -c ./src/uncrustify.cfg -q --replace --no-backup $(find ./src/nvim -name "*.[ch]")
-
-      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        name: suggester / uncrustify
-        uses: reviewdog/action-suggester@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tool_name: uncrustify
-          cleanup: false
-
-      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        name: check uncrustify
-        run: git diff --color --exit-code
+          cmake -S cmake.deps --preset ci
+          cmake --build .deps
+          cmake --preset ci
+      - run: cmake --build build --target clang-analyzer
 
   posix:
-    name: ${{ matrix.runner }} ${{ matrix.flavor }} (cc=${{ matrix.cc }})
+    name: ${{ matrix.build.os }} ${{ matrix.build.flavor }} ${{ matrix.build.cc }} ${{ matrix.test }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - flavor: asan
-            cc: clang
-            runner: ubuntu-22.04
-            flags: -D ENABLE_ASAN_UBSAN=ON
-          - flavor: tsan
-            cc: clang
-            runner: ubuntu-22.04
-            flags: -D ENABLE_TSAN=ON
-          - flavor: uchar
-            cc: gcc
-            runner: ubuntu-22.04
-            flags: -D UNSIGNED_CHAR=ON
-          - cc: clang
-            runner: macos-12
-            flags: -D CMAKE_FIND_FRAMEWORK=NEVER
-            deps_flags: -D CMAKE_FIND_FRAMEWORK=NEVER
-
-            # functionaltest-lua is our dumping ground for non-mainline configurations.
-            # 1. Check that the tests pass with PUC Lua instead of LuaJIT.
-            # 2. No treesitter parsers installed.
-          - flavor: functionaltest-lua
-            cc: gcc
-            runner: ubuntu-22.04
-            deps_flags: -D USE_BUNDLED_LUAJIT=OFF -D USE_BUNDLED_LUA=ON
-            flags: -D PREFER_LUA=ON
-    runs-on: ${{ matrix.runner }}
+        # The `os` field is not needed to differentiate between the different
+        # matrix builds. It is needed to not change the required checks (which
+        # uses jobs names) each time we bump the runner version. It may be
+        # possible to remove if we e.g. start using `-latest` runner versions
+        # or if github introduces a wildcard for required checks in the future.
+        build:
+          [
+            { runner: ubuntu-24.04, os: ubuntu, flavor: asan, cc: clang, flags: -D ENABLE_ASAN_UBSAN=ON },
+            { runner: ubuntu-24.04, os: ubuntu, flavor: tsan, cc: clang, flags: -D ENABLE_TSAN=ON },
+            { runner: ubuntu-24.04, os: ubuntu, flavor: release, cc: gcc, flags: -D CMAKE_BUILD_TYPE=Release },
+            # { runner: ubuntu-24.04-arm, os: ubuntu, flavor: arm, cc: gcc, flags: -D CMAKE_BUILD_TYPE=RelWithDebInfo },
+            { runner: macos-13, os: macos, flavor: intel, cc: clang, flags: -D CMAKE_FIND_FRAMEWORK=NEVER, deps_flags: -D CMAKE_FIND_FRAMEWORK=NEVER },
+            { runner: macos-15, os: macos, flavor: arm, cc: clang, flags: -D CMAKE_FIND_FRAMEWORK=NEVER, deps_flags: -D CMAKE_FIND_FRAMEWORK=NEVER },
+            { runner: ubuntu-24.04, os: ubuntu, flavor: puc-lua, cc: gcc, deps_flags: -D USE_BUNDLED_LUAJIT=OFF -D USE_BUNDLED_LUA=ON, flags: -D PREFER_LUA=ON },
+          ]
+        test: [unittest, functionaltest, oldtest]
+        exclude:
+          - test: unittest
+            build: { flavor: tsan }
+          - test: unittest
+            build: { flavor: puc-lua }
+          - test: oldtest
+            build: { flavor: tsan }
+    runs-on: ${{ matrix.build.runner }}
     timeout-minutes: 45
     env:
-      CC: ${{ matrix.cc }}
+      CC: ${{ matrix.build.cc }}
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up environment
-        run: |
-          ulimit -c unlimited
-          echo "$BIN_DIR" >> $GITHUB_PATH
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          install_flags: "--test"
 
       - name: Create log dir
         run: mkdir -p "$LOG_DIR"
 
-      - name: Install dependencies
-        run: ./.github/scripts/install_deps.sh cpanminus
-
-      - name: Setup interpreter packages
+      - if: ${{ matrix.test != 'unittest' }}
+        name: Set up interpreter packages
         run: |
-          # Use default CC to avoid compilation problems when installing Python modules.
-          echo "Install neovim module for Python."
-          CC=cc python3 -m pip -q install --user --upgrade pynvim
-
           echo "Install neovim RubyGem."
           gem install --no-document --bindir "$BIN_DIR" --user-install --pre neovim
 
-          echo "Install neovim npm package"
-          npm install -g neovim
-          npm link neovim
+          sudo cpanm -n Neovim::Ext || cat "$HOME/.cpanm/build.log"
+          perl -W -e 'use Neovim::Ext; print $Neovim::Ext::VERSION'
 
-          if [[ $RUNNER_OS != macOS ]]; then
-            sudo cpanm -n Neovim::Ext || cat "$HOME/.cpanm/build.log"
-            perl -W -e 'use Neovim::Ext; print $Neovim::Ext::VERSION'
-          fi
-
-      - uses: ./.github/actions/cache
+      - name: Remove .git directory
+        if: ${{ matrix.build.os == 'ubuntu' }}
+        run: cmake -E rm -rf -- .git
 
       - name: Build third-party deps
         run: |
-          cmake -S cmake.deps -B .deps -G Ninja ${{ matrix.deps_flags }}
+          cmake -S cmake.deps --preset ci -D CMAKE_BUILD_TYPE=Debug ${{ matrix.build.deps_flags }}
           cmake --build .deps
 
       - name: Build
         run: |
-          cmake --preset ci -D CMAKE_INSTALL_PREFIX:PATH=$INSTALL_PREFIX ${{ matrix.flags }}
+          cmake --preset ci -D CMAKE_BUILD_TYPE=Debug -D CMAKE_INSTALL_PREFIX:PATH=$INSTALL_PREFIX ${{ matrix.build.flags }}
           cmake --build build
 
-      - if: "!cancelled()"
-        name: Determine if run should be aborted
-        id: abort_job
-        run: echo "status=${{ job.status }}" >> $GITHUB_OUTPUT
-
-      - if: matrix.flavor != 'tsan' && matrix.flavor != 'functionaltest-lua' && (success() || failure() && steps.abort_job.outputs.status == 'success')
-        name: Unittest
-        timeout-minutes: 5
-        run: cmake --build build --target unittest
-
-      - if: matrix.flavor != 'functionaltest-lua' && (success() || failure() && steps.abort_job.outputs.status == 'success')
-        name: Functionaltest
+      - if: ${{ matrix.test == 'oldtest' }}
+        name: ${{ matrix.test }}
         timeout-minutes: 20
-        run: cmake --build build --target functionaltest
+        run: make -C test/old/testdir NVIM_PRG=$(realpath build)/bin/nvim
 
-      - if: matrix.flavor == 'functionaltest-lua' && (success() || failure() && steps.abort_job.outputs.status == 'success')
-        name: Functionaltest with PUC Lua
+      - if: ${{ matrix.test != 'oldtest' }}
+        name: ${{ matrix.test }}
         timeout-minutes: 20
-        run: cmake --build build --target functionaltest-lua
+        run: cmake --build build --target ${{ matrix.test }}
 
-      - if: matrix.flavor != 'tsan' && (success() || failure() && steps.abort_job.outputs.status == 'success')
-        name: Oldtest
-        run: make oldtest
-
-      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        name: Install
-        run: cmake --install build
-
-      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        name: Installtests
+      - name: Install
         run: |
+          cmake --install build
           "$INSTALL_PREFIX/bin/nvim" --version
           if ! "$INSTALL_PREFIX/bin/nvim" -u NONE -e -c ':help' -c ':qall'; then
             echo "Running ':help' in the installed nvim failed."
@@ -257,99 +197,44 @@ jobs:
             exit 1
           fi
 
-      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
+      - if: '!cancelled()'
         name: Show logs
         run: cat $(find "$LOG_DIR" -type f)
 
-  build-types:
-    runs-on: ubuntu-22.04
+  windows:
+    uses: ./.github/workflows/test_windows.yml
+
+  with-external-deps:
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      CC: gcc
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
 
       - name: Install dependencies
-        run: ./.github/scripts/install_deps.sh
+        run: |
+          sudo add-apt-repository ppa:neovim-ppa/stable
+          sudo apt-get install -y \
+            libluajit-5.1-dev \
+            libunibilium-dev \
+            libuv1-dev \
+            lua-filesystem \
+            lua-lpeg \
+            luajit \
+            lua-luv-dev
+            # libtree-sitter-dev \
 
-      - uses: ./.github/actions/cache
+            # Remove comments from packages once we start using these external
+            # dependencies.
 
       - name: Build third-party deps
         run: |
-          cmake -S cmake.deps -B .deps -G "Ninja Multi-Config"
-          cmake --build .deps
-
-      - name: Configure
-        run: cmake -B build -G "Ninja Multi-Config" -D CMAKE_C_COMPILER=gcc -D CI_BUILD=ON
-
-      - name: Release
-        run: cmake --build build --config Release
-
-      - name: RelWithDebInfo
-        run: cmake --build build --config RelWithDebInfo
-
-      - name: MinSizeRel
-        run: cmake --build build --config MinSizeRel
-
-  windows:
-    runs-on: windows-2022
-    timeout-minutes: 45
-    name: windows
-    steps:
-      - uses: actions/checkout@v3
-      - uses: ./.github/actions/cache
-      - run: .github/scripts/env.ps1
-
-      - name: Build deps
-        run: |
-          cmake -S cmake.deps -B .deps -G Ninja -D CMAKE_BUILD_TYPE='RelWithDebInfo'
+          cmake -S cmake.deps --preset external_deps
           cmake --build .deps
 
       - name: Build
         run: |
-          cmake --preset ci -D CMAKE_BUILD_TYPE='RelWithDebInfo'
+          cmake --preset ci
           cmake --build build
-
-      - name: Install test deps
-        run: |
-          $PSNativeCommandArgumentPassing = 'Legacy'
-
-          & build\bin\nvim.exe "--version"
-
-          # Ensure that the "win32" feature is set.
-          & build\bin\nvim -u NONE --headless -c 'exe !has(\"win32\").\"cq\"'
-
-          python -m pip install pynvim
-          # Sanity check
-          python -c "import pynvim; print(str(pynvim))"
-
-          node --version
-          npm.cmd --version
-
-          npm.cmd install -g neovim
-          Get-Command -CommandType Application neovim-node-host.cmd
-          npm.cmd link neovim
-
-      - if: "!cancelled()"
-        name: Determine if run should be aborted
-        id: abort_job
-        run: |
-          "status=${{ job.status }}" >> $env:GITHUB_OUTPUT
-
-      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        name: Run functionaltest
-        timeout-minutes: 20
-        run: cmake --build build --target functionaltest
-
-      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        uses: msys2/setup-msys2@v2
-        with:
-          update: true
-          pacboy: >-
-            make:p gcc:p diffutils:p
-          release: false
-
-      - if: success() || failure() && steps.abort_job.outputs.status == 'success'
-        name: Run oldtest
-        shell: msys2 {0}
-        run: |
-          cd test/old/testdir
-          mingw32-make VERBOSE=1

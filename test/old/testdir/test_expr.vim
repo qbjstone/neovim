@@ -69,9 +69,7 @@ func Test_op_falsy()
       call assert_equal(0z00, 0z00 ?? 456)
       call assert_equal([1], [1] ?? 456)
       call assert_equal({'one': 1}, {'one': 1} ?? 456)
-      if has('float')
-        call assert_equal(0.1, 0.1 ?? 456)
-      endif
+      call assert_equal(0.1, 0.1 ?? 456)
 
       call assert_equal(456, v:false ?? 456)
       call assert_equal(456, 0 ?? 456)
@@ -79,8 +77,23 @@ func Test_op_falsy()
       call assert_equal(456, 0z ?? 456)
       call assert_equal(456, [] ?? 456)
       call assert_equal(456, {} ?? 456)
-      if has('float')
-        call assert_equal(456, 0.0 ?? 456)
+      call assert_equal(456, 0.0 ?? 456)
+
+      call assert_equal(456, v:null ?? 456)
+      #" call assert_equal(456, v:none ?? 456)
+      call assert_equal(456, v:_null_string ?? 456)
+      call assert_equal(456, v:_null_blob ?? 456)
+      call assert_equal(456, v:_null_list ?? 456)
+      call assert_equal(456, v:_null_dict ?? 456)
+      #" Nvim doesn't have null functions
+      #" call assert_equal(456, test_null_function() ?? 456)
+      #" Nvim doesn't have null partials
+      #" call assert_equal(456, test_null_partial() ?? 456)
+      if has('job')
+        call assert_equal(456, test_null_job() ?? 456)
+      endif
+      if has('channel')
+        call assert_equal(456, test_null_channel() ?? 456)
       endif
   END
   call CheckLegacyAndVim9Success(lines)
@@ -141,6 +154,9 @@ func Test_strcharpart()
       call assert_equal('edit', "editor"[-10 : 3])
   END
   call CheckLegacyAndVim9Success(lines)
+
+  call assert_fails('call strcharpart("", 0, 0, {})', ['E728:', 'E728:'])
+  call assert_fails('call strcharpart("", 0, 0, -1)', ['E1023:', 'E1023:'])
 endfunc
 
 func Test_getreg_empty_list()
@@ -223,6 +239,8 @@ func Test_printf_misc()
   let lines =<< trim END
       call assert_equal('123', printf('123'))
 
+      call assert_equal('', printf('%'))
+      call assert_equal('', printf('%.0d', 0))
       call assert_equal('123', printf('%d', 123))
       call assert_equal('123', printf('%i', 123))
       call assert_equal('123', printf('%D', 123))
@@ -403,6 +421,7 @@ func Test_printf_misc()
       call assert_equal('[00000あiう]', printf('[%010.7S]', 'あiう'))
 
       call assert_equal('1%', printf('%d%%', 1))
+      call assert_notequal('', printf('%p', "abc"))
   END
   call CheckLegacyAndVim9Success(lines)
 
@@ -780,10 +799,10 @@ func Test_expr_completion()
   call assert_equal('"echo 1 || g:tvar1 g:tvar2', @:)
 
   " completion for options
-  call feedkeys(":echo &compat\<C-A>\<C-B>\"\<CR>", 'xt')
-  call assert_equal('"echo &compatible', @:)
-  call feedkeys(":echo 1 && &compat\<C-A>\<C-B>\"\<CR>", 'xt')
-  call assert_equal('"echo 1 && &compatible', @:)
+  "call feedkeys(":echo &compat\<C-A>\<C-B>\"\<CR>", 'xt')
+  "call assert_equal('"echo &compatible', @:)
+  "call feedkeys(":echo 1 && &compat\<C-A>\<C-B>\"\<CR>", 'xt')
+  "call assert_equal('"echo 1 && &compatible', @:)
   call feedkeys(":echo &g:equala\<C-A>\<C-B>\"\<CR>", 'xt')
   call assert_equal('"echo &g:equalalways', @:)
 
@@ -864,7 +883,7 @@ func Test_string_interp()
     #" String conversion.
     call assert_equal('hello from ' .. v:version, $"hello from {v:version}")
     call assert_equal('hello from ' .. v:version, $'hello from {v:version}')
-    #" Paper over a small difference between VimScript behaviour.
+    #" Paper over a small difference between Vim script behaviour.
     call assert_equal(string(v:true), $"{v:true}")
     call assert_equal('(1+1=2)', $"(1+1={1 + 1})")
     #" Hex-escaped opening brace: char2nr('{') == 0x7b
@@ -884,6 +903,22 @@ func Test_string_interp()
       echo "${ LET tmp += 1 }"
     endif
     call assert_equal(0, tmp)
+
+    #" Dict interpolation
+    VAR d = {'a': 10, 'b': [1, 2]}
+    call assert_equal("{'a': 10, 'b': [1, 2]}", $'{d}')
+    VAR emptydict = {}
+    call assert_equal("a{}b", $'a{emptydict}b')
+    VAR nulldict = v:_null_dict
+    call assert_equal("a{}b", $'a{nulldict}b')
+
+    #" List interpolation
+    VAR l = ['a', 'b', 'c']
+    call assert_equal("['a', 'b', 'c']", $'{l}')
+    VAR emptylist = []
+    call assert_equal("a[]b", $'a{emptylist}b')
+    VAR nulllist = v:_null_list
+    call assert_equal("a[]b", $'a{nulllist}b')
 
     #" Stray closing brace.
     call assert_fails('echo $"moo}"', 'E1278:')

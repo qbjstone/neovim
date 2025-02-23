@@ -166,8 +166,11 @@ func Test_term_mouse_multiple_clicks_to_select_mode()
   let save_term = &term
   " let save_ttymouse = &ttymouse
   " call test_override('no_query_mouse', 1)
-  " set mouse=a term=xterm mousetime=200
-  set mouse=a mousetime=200
+
+  " 'mousetime' must be sufficiently large, or else the test is flaky when
+  " using a ssh connection with X forwarding; i.e. ssh -X.
+  " set mouse=a term=xterm mousetime=1000
+  set mouse=a mousetime=1000
   set selectmode=mouse
   new
 
@@ -307,6 +310,33 @@ func Test_selectmode_register()
   call assert_equal('f', getreg('a'))
 
   bw!
+endfunc
+
+func Test_ins_ctrl_o_in_insert_mode_resets_selectmode()
+  new
+  " ctrl-o in insert mode resets restart_VIsual_select
+  call setline(1, 'abcdef')
+  call cursor(1, 1)
+  exe "norm! \<c-v>\<c-g>\<c-o>c\<c-o>\<c-v>\<right>\<right>IABC"
+  call assert_equal('ABCbcdef', getline(1))
+
+  bwipe!
+endfunc
+
+" Test that an :lmap mapping for a printable keypad key is applied when typing
+" it in Select mode.
+func Test_selectmode_keypad_lmap()
+  new
+  lnoremap <buffer> <kPoint> ???
+  lnoremap <buffer> <kEnter> !!!
+  setlocal iminsert=1
+  call setline(1, 'abcdef')
+  call feedkeys("gH\<kPoint>\<Esc>", 'tx')
+  call assert_equal(['???'], getline(1, '$'))
+  call feedkeys("gH\<kEnter>\<Esc>", 'tx')
+  call assert_equal(['!!!'], getline(1, '$'))
+
+  bwipe!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

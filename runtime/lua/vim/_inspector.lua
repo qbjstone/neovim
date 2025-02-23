@@ -1,8 +1,23 @@
----@class InspectorFilter
----@field syntax boolean include syntax based highlight groups (defaults to true)
----@field treesitter boolean include treesitter based highlight groups (defaults to true)
----@field extmarks boolean|"all" include extmarks. When `all`, then extmarks without a `hl_group` will also be included (defaults to true)
----@field semantic_tokens boolean include semantic token highlights (defaults to true)
+--- @diagnostic disable:no-unknown
+
+--- @class vim._inspector.Filter
+--- @inlinedoc
+---
+--- Include syntax based highlight groups.
+--- (default: `true`)
+--- @field syntax boolean
+---
+--- Include treesitter based highlight groups.
+--- (default: `true`)
+--- @field treesitter boolean
+---
+--- Include extmarks. When `all`, then extmarks without a `hl_group` will also be included.
+--- (default: true)
+--- @field extmarks boolean|"all"
+---
+--- Include semantic token highlights.
+--- (default: true)
+--- @field semantic_tokens boolean
 local defaults = {
   syntax = true,
   treesitter = true,
@@ -12,16 +27,13 @@ local defaults = {
 
 ---Get all the items at a given buffer position.
 ---
----Can also be pretty-printed with `:Inspect!`. *:Inspect!*
+---Can also be pretty-printed with `:Inspect!`. [:Inspect!]()
 ---
+---@since 11
 ---@param bufnr? integer defaults to the current buffer
 ---@param row? integer row to inspect, 0-based. Defaults to the row of the current cursor
 ---@param col? integer col to inspect, 0-based. Defaults to the col of the current cursor
----@param filter? InspectorFilter (table|nil) a table with key-value pairs to filter the items
----               - syntax (boolean): include syntax based highlight groups (defaults to true)
----               - treesitter (boolean): include treesitter based highlight groups (defaults to true)
----               - extmarks (boolean|"all"): include extmarks. When `all`, then extmarks without a `hl_group` will also be included (defaults to true)
----               - semantic_tokens (boolean): include semantic tokens (defaults to true)
+---@param filter? vim._inspector.Filter Table with key-value pairs to filter the items
 ---@return {treesitter:table,syntax:table,extmarks:table,semantic_tokens:table,buffer:integer,col:integer,row:integer} (table) a table with the following key-value pairs. Items are in "traversal order":
 ---               - treesitter: a list of treesitter captures
 ---               - syntax: a list of syntax groups
@@ -43,11 +55,11 @@ function vim.inspect_pos(bufnr, row, col, filter)
     local cursor = vim.api.nvim_win_get_cursor(win)
     row, col = cursor[1] - 1, cursor[2]
   end
-  bufnr = bufnr == 0 and vim.api.nvim_get_current_buf() or bufnr
+  bufnr = vim._resolve_bufnr(bufnr)
 
   local results = {
-    treesitter = {},
-    syntax = {},
+    treesitter = {}, --- @type table[]
+    syntax = {}, --- @type table[]
     extmarks = {},
     semantic_tokens = {},
     buffer = bufnr,
@@ -56,7 +68,6 @@ function vim.inspect_pos(bufnr, row, col, filter)
   }
 
   -- resolve hl links
-  ---@private
   local function resolve_hl(data)
     if data.hl_group then
       local hlid = vim.api.nvim_get_hl_id_by_name(data.hl_group)
@@ -69,6 +80,7 @@ function vim.inspect_pos(bufnr, row, col, filter)
   -- treesitter
   if filter.treesitter then
     for _, capture in pairs(vim.treesitter.get_captures_at_pos(bufnr, row, col)) do
+      --- @diagnostic disable-next-line: inject-field
       capture.hl_group = '@' .. capture.capture .. '.' .. capture.lang
       results.treesitter[#results.treesitter + 1] = resolve_hl(capture)
     end
@@ -76,7 +88,7 @@ function vim.inspect_pos(bufnr, row, col, filter)
 
   -- syntax
   if filter.syntax and vim.api.nvim_buf_is_valid(bufnr) then
-    vim.api.nvim_buf_call(bufnr, function()
+    vim._with({ buf = bufnr }, function()
       for _, i1 in ipairs(vim.fn.synstack(row + 1, col + 1)) do
         results.syntax[#results.syntax + 1] =
           resolve_hl({ hl_group = vim.fn.synIDattr(i1, 'name') })
@@ -85,13 +97,12 @@ function vim.inspect_pos(bufnr, row, col, filter)
   end
 
   -- namespace id -> name map
-  local nsmap = {}
+  local nsmap = {} --- @type table<integer,string>
   for name, id in pairs(vim.api.nvim_get_namespaces()) do
     nsmap[id] = name
   end
 
-  --- Convert an extmark tuple into a map-like table
-  --- @private
+  --- Convert an extmark tuple into a table
   local function to_map(extmark)
     extmark = {
       id = extmark[1],
@@ -107,7 +118,6 @@ function vim.inspect_pos(bufnr, row, col, filter)
   end
 
   --- Check if an extmark overlaps this position
-  --- @private
   local function is_here(extmark)
     return (row >= extmark.row and row <= extmark.end_row) -- within the rows of the extmark
       and (row > extmark.row or col >= extmark.col) -- either not the first row, or in range of the col
@@ -121,13 +131,13 @@ function vim.inspect_pos(bufnr, row, col, filter)
 
   if filter.semantic_tokens then
     results.semantic_tokens = vim.tbl_filter(function(extmark)
-      return extmark.ns:find('vim_lsp_semantic_tokens') == 1
+      return extmark.ns:find('nvim.lsp.semantic_tokens') == 1
     end, extmarks)
   end
 
   if filter.extmarks then
     results.extmarks = vim.tbl_filter(function(extmark)
-      return extmark.ns:find('vim_lsp_semantic_tokens') ~= 1
+      return extmark.ns:find('nvim.lsp.semantic_tokens') ~= 1
         and (filter.extmarks == 'all' or extmark.opts.hl_group)
     end, extmarks)
   end
@@ -137,28 +147,33 @@ end
 
 ---Show all the items at a given buffer position.
 ---
----Can also be shown with `:Inspect`. *:Inspect*
+---Can also be shown with `:Inspect`. [:Inspect]()
 ---
+---Example: To bind this function to the vim-scriptease
+---inspired `zS` in Normal mode:
+---
+---```lua
+---vim.keymap.set('n', 'zS', vim.show_pos)
+---```
+---
+---@since 11
 ---@param bufnr? integer defaults to the current buffer
 ---@param row? integer row to inspect, 0-based. Defaults to the row of the current cursor
 ---@param col? integer col to inspect, 0-based. Defaults to the col of the current cursor
----@param filter? InspectorFilter (table|nil) see |vim.inspect_pos()|
+---@param filter? vim._inspector.Filter
 function vim.show_pos(bufnr, row, col, filter)
   local items = vim.inspect_pos(bufnr, row, col, filter)
 
   local lines = { {} }
 
-  ---@private
   local function append(str, hl)
     table.insert(lines[#lines], { str, hl })
   end
 
-  ---@private
   local function nl()
     table.insert(lines, {})
   end
 
-  ---@private
   local function item(data, comment)
     append('  - ')
     append(data.hl_group, data.hl_group)
@@ -166,7 +181,7 @@ function vim.show_pos(bufnr, row, col, filter)
     if data.hl_group ~= data.hl_group_link then
       append('links to ', 'MoreMsg')
       append(data.hl_group_link, data.hl_group_link)
-      append(' ')
+      append('   ')
     end
     if comment then
       append(comment, 'Comment')
@@ -179,7 +194,14 @@ function vim.show_pos(bufnr, row, col, filter)
     append('Treesitter', 'Title')
     nl()
     for _, capture in ipairs(items.treesitter) do
-      item(capture, capture.lang)
+      item(
+        capture,
+        string.format(
+          'priority: %d   language: %s',
+          capture.metadata.priority or vim.hl.priorities.treesitter,
+          capture.lang
+        )
+      )
     end
     nl()
   end

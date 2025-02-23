@@ -41,20 +41,24 @@ end
 -- Exclude these from the vimCommand keyword list, they are handled specially
 -- in syntax/vim.vim (vimAugroupKey, vimAutoCmd, vimGlobal, vimSubst). #9327
 local function is_special_cased_cmd(cmd)
-  return (cmd == 'augroup'
-          or cmd == 'autocmd'
-          or cmd == 'doautocmd'
-          or cmd == 'doautoall'
-          or cmd == 'global'
-          or cmd == 'substitute')
+  return (
+    cmd == 'augroup'
+    or cmd == 'autocmd'
+    or cmd == 'doautocmd'
+    or cmd == 'doautoall'
+    or cmd == 'global'
+    or cmd == 'substitute'
+  )
 end
 
 local vimcmd_start = 'syn keyword vimCommand contained '
+local vimcmd_end = ' nextgroup=vimBang'
 w(vimcmd_start)
+
 local prev_cmd = nil
 for _, cmd_desc in ipairs(ex_cmds.cmds) do
   if lld.line_length > 850 then
-    w('\n' .. vimcmd_start)
+    w(vimcmd_end .. '\n' .. vimcmd_start)
   end
   local cmd = cmd_desc.command
   if cmd:match('%w') and cmd ~= 'z' and not is_special_cased_cmd(cmd) then
@@ -77,19 +81,22 @@ for _, cmd_desc in ipairs(ex_cmds.cmds) do
   prev_cmd = cmd
 end
 
+w(vimcmd_end .. '\n')
+
 local vimopt_start = 'syn keyword vimOption contained '
-w('\n\n' .. vimopt_start)
+local vimopt_end = ' skipwhite nextgroup=vimSetEqual,vimSetMod'
+w('\n' .. vimopt_start)
 
 for _, opt_desc in ipairs(options.options) do
-  if not opt_desc.varname or opt_desc.varname:sub(1, 7) ~= 'p_force' then
+  if not opt_desc.immutable then
     if lld.line_length > 850 then
-      w('\n' .. vimopt_start)
+      w(vimopt_end .. '\n' .. vimopt_start)
     end
     w(' ' .. opt_desc.full_name)
     if opt_desc.abbreviation then
       w(' ' .. opt_desc.abbreviation)
     end
-    if opt_desc.type == 'bool' then
+    if opt_desc.type == 'boolean' then
       w(' inv' .. opt_desc.full_name)
       w(' no' .. opt_desc.full_name)
       if opt_desc.abbreviation then
@@ -100,24 +107,25 @@ for _, opt_desc in ipairs(options.options) do
   end
 end
 
-w('\n\nsyn case ignore')
+w(vimopt_end .. '\n')
+
+w('\nsyn case ignore')
 local vimau_start = 'syn keyword vimAutoEvent contained '
 w('\n\n' .. vimau_start)
 
 for _, au in ipairs(auevents.events) do
-  if not auevents.nvim_specific[au] then
+  if not auevents.nvim_specific[au[1]] then
     if lld.line_length > 850 then
       w('\n' .. vimau_start)
     end
-    w(' ' .. au)
-  end
-end
-for au, _ in pairs(auevents.aliases) do
-  if not auevents.nvim_specific[au] then
-    if lld.line_length > 850 then
-      w('\n' .. vimau_start)
+    w(' ' .. au[1])
+    for _, alias in ipairs(au[2]) do
+      if lld.line_length > 850 then
+        w('\n' .. vimau_start)
+      end
+      -- au[1] is aliased to alias
+      w(' ' .. alias)
     end
-    w(' ' .. au)
   end
 end
 
@@ -134,7 +142,7 @@ end
 w('\n\nsyn case match')
 local vimfun_start = 'syn keyword vimFuncName contained '
 w('\n\n' .. vimfun_start)
-local funcs = mpack.decode(io.open(funcs_file, 'rb'):read("*all"))
+local funcs = mpack.decode(io.open(funcs_file, 'rb'):read('*all'))
 for _, name in ipairs(funcs) do
   if name then
     if lld.line_length > 850 then

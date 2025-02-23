@@ -146,6 +146,15 @@ func Test_for_over_null_string()
   let &enc = save_enc
 endfunc
 
+func Test_for_with_modifier()
+  " this checks has_loop_cmd() works with a modifier
+  let result = []
+  horizontal for i in range(3)
+    call extend(result, [i])
+  endfor
+  call assert_equal([0, 1, 2], result)
+endfunc
+
 func Test_for_invalid_line_count()
   let lines =<< trim END
       111111111111111111111111 for line in ['one']
@@ -230,6 +239,12 @@ func Test_string_concatenation()
   let a = 'a'
   let a..=b
   call assert_equal('ab', a)
+
+  if has('float')
+    let a = 'A'
+    let b = 1.234
+    call assert_equal('A1.234', a .. b)
+  endif
 endfunc
 
 " Test fix for issue #4507

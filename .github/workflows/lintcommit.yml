@@ -1,4 +1,4 @@
-name: "Commit Linter"
+name: lintcommit
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -9,11 +9,19 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: rhysd/action-setup-vim@v1
-        with:
-          neovim: true
-      - run: nvim --clean -l scripts/lintcommit.lua main
+
+      - uses: ./.github/actions/setup
+
+      - name: Build
+        run: |
+          cmake -S cmake.deps --preset ci
+          cmake --build .deps
+          cmake --preset ci
+          cmake --build build
+
+      - name: lintcommit
+        run: cmake --build build --target lintcommit

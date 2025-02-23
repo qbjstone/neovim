@@ -1,11 +1,9 @@
-// This is an open source non-commercial project. Dear PVS-Studio, please check
-// it. PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
-
 #include <uv.h>
 
+#include "nvim/log.h"
 #include "nvim/os/os.h"
 #include "nvim/os/pty_conpty_win.h"
-#include "nvim/vim.h"
+#include "nvim/vim_defs.h"
 
 #ifndef EXTENDED_STARTUPINFO_PRESENT
 # define EXTENDED_STARTUPINFO_PRESENT 0x00080000
@@ -14,9 +12,9 @@
 # define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE 0x00020016
 #endif
 
-HRESULT (WINAPI *pCreatePseudoConsole)(COORD, HANDLE, HANDLE, DWORD, HPCON *);
-HRESULT (WINAPI *pResizePseudoConsole)(HPCON, COORD);
-void (WINAPI *pClosePseudoConsole)(HPCON);
+HRESULT(WINAPI *pCreatePseudoConsole)(COORD, HANDLE, HANDLE, DWORD, HPCON *);
+HRESULT(WINAPI *pResizePseudoConsole)(HPCON, COORD);
+void(WINAPI *pClosePseudoConsole)(HPCON);
 
 bool os_has_conpty_working(void)
 {
@@ -145,7 +143,7 @@ finished:
   return conpty_object;
 }
 
-bool os_conpty_spawn(conpty_t *conpty_object, HANDLE *process_handle, wchar_t *name,
+bool os_conpty_spawn(conpty_t *conpty_object, HANDLE *proc_handle, wchar_t *name,
                      wchar_t *cmd_line, wchar_t *cwd, wchar_t *env)
 {
   PROCESS_INFORMATION pi = { 0 };
@@ -161,7 +159,7 @@ bool os_conpty_spawn(conpty_t *conpty_object, HANDLE *process_handle, wchar_t *n
                       &pi)) {
     return false;
   }
-  *process_handle = pi.hProcess;
+  *proc_handle = pi.hProcess;
   return true;
 }
 
